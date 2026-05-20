@@ -630,6 +630,7 @@ if (window.electronAPI?.onOpenFile) {
   window.electronAPI.onOpenFile(async (filePath) => {
     try {
       const content = await window.electronAPI.readFile(filePath)
+      if (content == null) { console.error('Failed to read file:', filePath); return }
       const name = window.electronAPI.basename(filePath)
       const existing = editorPanes.find(t => t.name === name)
       if (existing) { activateTab(existing.id); return }
@@ -652,10 +653,28 @@ async function initApp() {
   renderRecentDOM()
   renderExplorerDOM()
 
-  const openFilePath = new URLSearchParams(window.location.search).get('openFile')
+  // Migrate old localStorage keys (md-studio-sidebar-collapsed / md-studio-editor-collapsed) to new three-state keys
+  const oldSidebar = localStorage.getItem('md-studio-sidebar-collapsed')
+  if (oldSidebar && !localStorage.getItem('md-studio-sidebar-state')) {
+    localStorage.setItem('md-studio-sidebar-state', oldSidebar === '1' ? 'collapsed' : 'normal')
+    localStorage.removeItem('md-studio-sidebar-collapsed')
+  }
+  const oldEditor = localStorage.getItem('md-studio-editor-collapsed')
+  if (oldEditor && !localStorage.getItem('md-studio-editor-state')) {
+    localStorage.setItem('md-studio-editor-state', oldEditor === '1' ? 'collapsed' : 'normal')
+    localStorage.removeItem('md-studio-editor-collapsed')
+  }
+
+  const openFileParam = new URLSearchParams(window.location.search).get('openFile')
+  const openFilePath = openFileParam ? decodeURIComponent(openFileParam) : null
   if (openFilePath && window.electronAPI?.readFile) {
     try {
       const content = await window.electronAPI.readFile(openFilePath)
+      if (content == null) {
+        console.error('Failed to read file:', openFilePath)
+        newFile()
+        return
+      }
       const name = window.electronAPI.basename(openFilePath)
       const state = newTabState(name, content, null)
       editorPanes.push(state)
@@ -670,40 +689,94 @@ async function initApp() {
     newFile()
   }
 
-  if (localStorage.getItem('md-studio-sidebar-collapsed')) {
-    document.body.classList.add('sidebar-collapsed')
-    updateSidebarToggleIcon()
+  // Restore sidebar state
+  const sidebarState = localStorage.getItem('md-studio-sidebar-state') || 'normal'
+  if (sidebarState !== 'normal') {
+    document.body.classList.add(`sidebar-${sidebarState}`)
   }
-  if (localStorage.getItem('md-studio-editor-collapsed')) {
-    document.body.classList.add('editor-collapsed')
-    updateEditorToggleIcon()
+  updateSidebarToggleIcon(sidebarState)
+
+  // Restore editor state
+  const editorState = localStorage.getItem('md-studio-editor-state') || 'normal'
+  if (editorState !== 'normal') {
+    document.body.classList.add(`editor-${editorState}`)
   }
+  updateEditorToggleIcon(editorState)
 }
 initApp()
 
-function toggleSidebar() {
-  document.body.classList.toggle('sidebar-collapsed')
-  localStorage.setItem('md-studio-sidebar-collapsed', document.body.classList.contains('sidebar-collapsed') ? '1' : '')
-  updateSidebarToggleIcon()
-}
-function updateSidebarToggleIcon() {
-  const icon = document.querySelector('#sidebar-toggle-btn .material-symbols-outlined')
-  if (icon) icon.textContent = document.body.classList.contains('sidebar-collapsed') ? 'menu' : 'menu_open'
+function cycleSidebarState() {
+  const currentState = localStorage.getItem('md-studio-sidebar-state') || 'normal'
+  let nextState
+  if (currentState === 'normal') nextState = 'compact'
+  else if (currentState === 'compact') nextState = 'collapsed'
+  else nextState = 'normal'
+
+  document.body.classList.remove('sidebar-normal', 'sidebar-compact', 'sidebar-collapsed')
+  if (nextState !== 'normal') {
+    document.body.classList.add(`sidebar-${nextState}`)
+  }
+  localStorage.setItem('md-studio-sidebar-state', nextState)
+  updateSidebarToggleIcon(nextState)
 }
 
-function toggleEditorPane() {
-  document.body.classList.toggle('editor-collapsed')
-  localStorage.setItem('md-studio-editor-collapsed', document.body.classList.contains('editor-collapsed') ? '1' : '')
-  updateEditorToggleIcon()
+function cycleEditorState() {
+  const currentState = localStorage.getItem('md-studio-editor-state') || 'normal'
+  let nextState
+  if (currentState === 'normal') nextState = 'compact'
+  else if (currentState === 'compact') nextState = 'collapsed'
+  else nextState = 'normal'
+
+  document.body.classList.remove('editor-normal', 'editor-compact', 'editor-collapsed')
+  if (nextState !== 'normal') {
+    document.body.classList.add(`editor-${nextState}`)
+  }
+  localStorage.setItem('md-studio-editor-state', nextState)
+  updateEditorToggleIcon(nextState)
 }
-function updateEditorToggleIcon() {
+
+function updateSidebarToggleIcon(state) {
+  const icon = document.querySelector('#sidebar-toggle-btn .material-symbols-outlined')
+  if (!icon) return
+  // Determine icon based on state
+  if (!state) state = localStorage.getItem('md-studio-sidebar-state') || 'normal'
+  switch (state) {
+    case 'normal':
+      icon.textContent = 'menu_open'
+      break
+    case 'compact':
+      icon.textContent = 'menu' // or another icon like 'format_align_center'
+      break
+    case 'collapsed':
+      icon.textContent = 'more_vert' // or 'menu' but maybe different
+      break
+    default:
+      icon.textContent = 'menu_open'
+  }
+}
+
+function updateEditorToggleIcon(state) {
   const icon = document.querySelector('#editor-toggle-btn .material-symbols-outlined')
-  if (icon) icon.textContent = document.body.classList.contains('editor-collapsed') ? 'chevron_right' : 'chevron_left'
+  if (!icon) return
+  if (!state) state = localStorage.getItem('md-studio-editor-state') || 'normal'
+  switch (state) {
+    case 'normal':
+      icon.textContent = 'format_align_left' // or something indicating full width
+      break
+    case 'compact':
+      icon.textContent = 'format_align_center' // or 'view_agenda'
+      break
+    case 'collapsed':
+      icon.textContent = 'format_align_right' // or 'view_list'
+      break
+    default:
+      icon.textContent = 'format_align_left'
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   const sbBtn = document.getElementById('sidebar-toggle-btn')
-  if (sbBtn) sbBtn.addEventListener('click', toggleSidebar)
+  if (sbBtn) sbBtn.addEventListener('click', cycleSidebarState)
   const edBtn = document.getElementById('editor-toggle-btn')
-  if (edBtn) edBtn.addEventListener('click', toggleEditorPane)
+  if (edBtn) edBtn.addEventListener('click', cycleEditorState)
 })

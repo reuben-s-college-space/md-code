@@ -18,7 +18,9 @@ function createWindow(filePathToOpen) {
     }
   })
 
-  const query = filePathToOpen ? { query: { openFile: filePathToOpen } } : {}
+  console.log('main.js - filePathToOpen:', filePathToOpen)
+  const query = filePathToOpen ? { query: { openFile: encodeURIComponent(filePathToOpen) } } : {}
+  console.log('main.js - query:', query)
   mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), query)
   mainWindow.on('page-title-updated', (e) => e.preventDefault())
 }
@@ -32,9 +34,12 @@ function openFileInWindow(filePath) {
 }
 
 function getFilePathFromArgs(argv) {
-  return argv.find(a => {
+  return argv.slice(1).find(a => {
+    if (a.startsWith('-')) return false
     const lower = a.toLowerCase()
-    return lower.endsWith('.md') || lower.endsWith('.markdown')
+    if (!lower.endsWith('.md') && !lower.endsWith('.markdown')) return false
+    // Basic path validity check: must include drive letter (Windows) or leading slash
+    return lower.includes(':') || lower.startsWith('/') || lower.startsWith('\\')
   })
 }
 
@@ -44,6 +49,7 @@ if (!gotTheLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, commandLine) => {
+    console.log('second-instance commandLine:', commandLine)
     const filePath = getFilePathFromArgs(commandLine)
     if (filePath) openFileInWindow(filePath)
     else if (mainWindow) {
@@ -58,7 +64,13 @@ if (!gotTheLock) {
   })
 
   ipcMain.handle('read-file', async (_event, filePath) => {
-    return await fs.promises.readFile(filePath, 'utf-8')
+    try {
+      const content = await fs.promises.readFile(filePath, 'utf-8')
+      return content
+    } catch (e) {
+      console.error('read-file error:', e)
+      return null
+    }
   })
 
   app.whenReady().then(() => {
