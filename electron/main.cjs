@@ -4,7 +4,7 @@ const fs = require('fs')
 
 let mainWindow = null
 
-function createWindow() {
+function createWindow(filePathToOpen) {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -18,7 +18,8 @@ function createWindow() {
     }
   })
 
-  mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+  const query = filePathToOpen ? { query: { openFile: filePathToOpen } } : {}
+  mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), query)
   mainWindow.on('page-title-updated', (e) => e.preventDefault())
 }
 
@@ -61,11 +62,8 @@ if (!gotTheLock) {
   })
 
   app.whenReady().then(() => {
-    createWindow()
-    mainWindow.webContents.once('did-finish-load', () => {
-      const filePath = getFilePathFromArgs(process.argv)
-      if (filePath) openFileInWindow(filePath)
-    })
+    const filePath = getFilePathFromArgs(process.argv)
+    createWindow(filePath)
   })
 }
 

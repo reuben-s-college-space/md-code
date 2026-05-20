@@ -646,8 +646,64 @@ if (window.electronAPI?.onOpenFile) {
 
 document.addEventListener('keydown', e => { const ctrl = e.ctrlKey || e.metaKey; if (ctrl && e.key === 's') { e.preventDefault(); if (e.shiftKey) saveCurrentTabAs(); else saveCurrentTab() } if (ctrl && e.key === 'o') { e.preventDefault(); openFile() } if (ctrl && e.key === 'n') { e.preventDefault(); newFile() } if (ctrl && e.key === 'b') { e.preventDefault(); wrapSelection('**','**') } if (ctrl && e.key === 'i') { e.preventDefault(); wrapSelection('*','*') } if (ctrl && e.key === 'd' && !e.shiftKey) { e.preventDefault(); wrapSelection('~~','~~') } if (ctrl && e.key === 'h') { e.preventDefault(); insertLinePrefix('# ') } if (ctrl && e.key === '`') { e.preventDefault(); wrapSelection('`','`') } if (ctrl && e.shiftKey && e.key === 'K') { e.preventDefault(); insertAtCursor('\n```\n', '\n```\n', 'code here') } if (ctrl && e.key === 'k' && !e.shiftKey) { e.preventDefault(); wrapSelection('[','](url)') } if (ctrl && e.key === 'l' && !e.shiftKey) { e.preventDefault(); insertLinePrefix('- ') } if (ctrl && e.shiftKey && e.key === 'L') { e.preventDefault(); insertLinePrefix('1. ') } if (ctrl && e.key === 'q') { e.preventDefault(); insertLinePrefix('> ') } if (ctrl && e.key === 'f') { e.preventDefault(); toggleFind() } if (e.key === 'Escape') { closeAllMenus(); if (!$('find-replace-bar').classList.contains('hidden')) $('find-replace-bar').classList.add('hidden'); if (settingsOpen) toggleSettings(false); if ($('batch-modal').classList.contains('show')) closeBatchModal() } })
 
-initTheme()
-restoreFontPrefs()
-renderRecentDOM()
-renderExplorerDOM()
-newFile()
+async function initApp() {
+  initTheme()
+  restoreFontPrefs()
+  renderRecentDOM()
+  renderExplorerDOM()
+
+  const openFilePath = new URLSearchParams(window.location.search).get('openFile')
+  if (openFilePath && window.electronAPI?.readFile) {
+    try {
+      const content = await window.electronAPI.readFile(openFilePath)
+      const name = window.electronAPI.basename(openFilePath)
+      const state = newTabState(name, content, null)
+      editorPanes.push(state)
+      state.tabEl = renderTabDOM(state)
+      activateTab(state.id)
+      recordFileOpen(name, null, openFilePath)
+    } catch (e) {
+      console.error(e)
+      newFile()
+    }
+  } else {
+    newFile()
+  }
+
+  if (localStorage.getItem('md-studio-sidebar-collapsed')) {
+    document.body.classList.add('sidebar-collapsed')
+    updateSidebarToggleIcon()
+  }
+  if (localStorage.getItem('md-studio-editor-collapsed')) {
+    document.body.classList.add('editor-collapsed')
+    updateEditorToggleIcon()
+  }
+}
+initApp()
+
+function toggleSidebar() {
+  document.body.classList.toggle('sidebar-collapsed')
+  localStorage.setItem('md-studio-sidebar-collapsed', document.body.classList.contains('sidebar-collapsed') ? '1' : '')
+  updateSidebarToggleIcon()
+}
+function updateSidebarToggleIcon() {
+  const icon = document.querySelector('#sidebar-toggle-btn .material-symbols-outlined')
+  if (icon) icon.textContent = document.body.classList.contains('sidebar-collapsed') ? 'menu' : 'menu_open'
+}
+
+function toggleEditorPane() {
+  document.body.classList.toggle('editor-collapsed')
+  localStorage.setItem('md-studio-editor-collapsed', document.body.classList.contains('editor-collapsed') ? '1' : '')
+  updateEditorToggleIcon()
+}
+function updateEditorToggleIcon() {
+  const icon = document.querySelector('#editor-toggle-btn .material-symbols-outlined')
+  if (icon) icon.textContent = document.body.classList.contains('editor-collapsed') ? 'chevron_right' : 'chevron_left'
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const sbBtn = document.getElementById('sidebar-toggle-btn')
+  if (sbBtn) sbBtn.addEventListener('click', toggleSidebar)
+  const edBtn = document.getElementById('editor-toggle-btn')
+  if (edBtn) edBtn.addEventListener('click', toggleEditorPane)
+})

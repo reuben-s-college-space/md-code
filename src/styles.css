@@ -295,3 +295,20 @@
     background: #2f3131;
     color: #f1f1f1;
 }
+
+#sidebar { transition: width 0.2s ease, padding 0.2s ease, border 0.2s ease; }
+body.sidebar-collapsed #sidebar {
+    width: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden;
+    border-right: none;
+    padding: 0;
+}
+#main-content { transition: margin-left 0.2s ease; }
+body.sidebar-collapsed #main-content {
+    margin-left: 0 !important;
+}
+
+body.editor-collapsed #editor-pane { display: none !important; }
+body.editor-collapsed #gutter { display: none !important; }
+body.editor-collapsed #preview-pane { flex: 1 !important; width: 100% !important; }
