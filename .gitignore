@@ -18,6 +18,9 @@ stitch_multi_pane_markdown_studio.zip
 # Export outputs
 *.pdf
 
+# Electron build output
+release/
+
 # Logo PNG backups (SVG is used inline)
 M (1).png
 app_logo.png

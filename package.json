@@ -4,11 +4,37 @@
   "description": "Professional-grade markdown editor with live preview, multi-tab support, and export to HTML/PDF/PNG/JPG.",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "gh-pages -d dist"
+    "deploy": "gh-pages -d dist",
+    "electron:dev": "npm run build && electron .",
+    "electron:build": "npm run build && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.mdcode.app",
+    "productName": "MD Code",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "M (1).svg"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "MD-Code-${version}-Setup.${ext}"
+    }
   },
   "dependencies": {
     "file-saver": "^2.0.5",
@@ -20,6 +46,8 @@
   },
   "devDependencies": {
     "autoprefixer": "^10.4.21",
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1",
     "gh-pages": "^6.3.0",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
