@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+
+# Dev artifacts
+index.html.bak
+context.md
+info.md
+screen.png
+*.log
+
+# Source mockup files
+code.html
+stitch_multi_pane_markdown_studio/
+stitch_multi_pane_markdown_studio.zip
+
+# Export outputs
+*.pdf
+
+# Logo PNG backups (SVG is used inline)
+M (1).png
+app_logo.png
+
+# SVG animation frames (not used in app)
+svg animation files for the logo/
