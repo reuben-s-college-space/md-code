@@ -82,22 +82,22 @@
     display: block;
 }
 
-#preview-pane-content h1, .preview-export h1 { font-size: 28px; line-height: 36px; font-weight: 700; margin-bottom: 24px; font-family: 'Inter', sans-serif; color: #1a1c1c; }
+#preview-pane-content h1, .preview-export h1 { font-size: 28px; line-height: 36px; font-weight: 700; margin-bottom: 24px; color: #1a1c1c; }
 .dark #preview-pane-content h1, .dark .preview-export h1 { color: #f1f1f1; }
-#preview-pane-content h2, .preview-export h2 { font-size: 22px; line-height: 30px; font-weight: 600; margin-top: 32px; margin-bottom: 16px; font-family: 'Inter', sans-serif; color: #1a1c1c; }
+#preview-pane-content h2, .preview-export h2 { font-size: 22px; line-height: 30px; font-weight: 600; margin-top: 32px; margin-bottom: 16px; color: #1a1c1c; }
 .dark #preview-pane-content h2, .dark .preview-export h2 { color: #f1f1f1; }
-#preview-pane-content h3, .preview-export h3 { font-size: 18px; line-height: 26px; font-weight: 600; margin-top: 24px; margin-bottom: 12px; font-family: 'Inter', sans-serif; color: #1a1c1c; }
+#preview-pane-content h3, .preview-export h3 { font-size: 18px; line-height: 26px; font-weight: 600; margin-top: 24px; margin-bottom: 12px; color: #1a1c1c; }
 .dark #preview-pane-content h3, .dark .preview-export h3 { color: #f1f1f1; }
-#preview-pane-content h4, .preview-export h4 { font-size: 16px; line-height: 24px; font-weight: 600; margin-top: 20px; margin-bottom: 10px; font-family: 'Inter', sans-serif; color: #1a1c1c; }
+#preview-pane-content h4, .preview-export h4 { font-size: 16px; line-height: 24px; font-weight: 600; margin-top: 20px; margin-bottom: 10px; color: #1a1c1c; }
 .dark #preview-pane-content h4, .dark .preview-export h4 { color: #f1f1f1; }
-#preview-pane-content h5, .preview-export h5 { font-size: 14px; line-height: 20px; font-weight: 600; margin-top: 16px; margin-bottom: 8px; font-family: 'Inter', sans-serif; color: #1a1c1c; }
+#preview-pane-content h5, .preview-export h5 { font-size: 14px; line-height: 20px; font-weight: 600; margin-top: 16px; margin-bottom: 8px; color: #1a1c1c; }
 .dark #preview-pane-content h5, .dark .preview-export h5 { color: #f1f1f1; }
-#preview-pane-content h6, .preview-export h6 { font-size: 13px; line-height: 18px; font-weight: 600; margin-top: 16px; margin-bottom: 8px; font-family: 'Inter', sans-serif; color: #1a1c1c; }
+#preview-pane-content h6, .preview-export h6 { font-size: 13px; line-height: 18px; font-weight: 600; margin-top: 16px; margin-bottom: 8px; color: #1a1c1c; }
 .dark #preview-pane-content h6, .dark .preview-export h6 { color: #f1f1f1; }
-#preview-pane-content p, .preview-export p { font-size: 16px; line-height: 26px; font-weight: 400; margin-bottom: 16px; font-family: 'Source Serif 4', serif; color: #1a1c1c; }
+#preview-pane-content p, .preview-export p { font-size: 16px; line-height: 26px; font-weight: 400; margin-bottom: 16px; color: #1a1c1c; }
 .dark #preview-pane-content p, .dark .preview-export p { color: #e0e0e0; }
 #preview-pane-content ul, #preview-pane-content ol, .preview-export ul, .preview-export ol { margin-bottom: 16px; padding-left: 24px; }
-#preview-pane-content li, .preview-export li { font-size: 16px; line-height: 26px; margin-bottom: 4px; font-family: 'Source Serif 4', serif; color: #1a1c1c; }
+#preview-pane-content li, .preview-export li { font-size: 16px; line-height: 26px; margin-bottom: 4px; color: #1a1c1c; }
 .dark #preview-pane-content li, .dark .preview-export li { color: #e0e0e0; }
 #preview-pane-content blockquote, .preview-export blockquote { border-left: 4px solid #004f96; padding-left: 16px; margin-left: 0; margin-bottom: 16px; font-style: italic; color: #605e5c; }
 .dark #preview-pane-content blockquote, .dark .preview-export blockquote { border-color: #a6c8ff; color: #c9c6c3; }

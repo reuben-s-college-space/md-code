@@ -3,6 +3,7 @@ const path = require('path')
 const fs = require('fs')
 
 let mainWindow = null
+let pendingOpenFile = null
 
 function createWindow(filePathToOpen) {
   mainWindow = new BrowserWindow({
@@ -18,19 +19,18 @@ function createWindow(filePathToOpen) {
     }
   })
 
-  console.log('main.js - filePathToOpen:', filePathToOpen)
-  const query = filePathToOpen ? { query: { openFile: encodeURIComponent(filePathToOpen) } } : {}
-  console.log('main.js - query:', query)
+  const fileToLoad = filePathToOpen || pendingOpenFile
+  pendingOpenFile = null
+  const query = fileToLoad ? { query: { openFile: encodeURIComponent(fileToLoad) } } : {}
   mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), query)
   mainWindow.on('page-title-updated', (e) => e.preventDefault())
 }
 
 function openFileInWindow(filePath) {
-  if (mainWindow) {
-    mainWindow.webContents.send('open-file', filePath)
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  }
+  if (!mainWindow) { pendingOpenFile = filePath; return }
+  mainWindow.webContents.send('open-file', filePath)
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
 }
 
 function getFilePathFromArgs(argv) {
@@ -38,8 +38,7 @@ function getFilePathFromArgs(argv) {
     if (a.startsWith('-')) return false
     const lower = a.toLowerCase()
     if (!lower.endsWith('.md') && !lower.endsWith('.markdown')) return false
-    // Basic path validity check: must include drive letter (Windows) or leading slash
-    return lower.includes(':') || lower.startsWith('/') || lower.startsWith('\\')
+    return /^[a-z]:\\/.test(lower) || lower.startsWith('/') || lower.startsWith('\\\\')
   })
 }
 
@@ -49,7 +48,6 @@ if (!gotTheLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, commandLine) => {
-    console.log('second-instance commandLine:', commandLine)
     const filePath = getFilePathFromArgs(commandLine)
     if (filePath) openFileInWindow(filePath)
     else if (mainWindow) {
