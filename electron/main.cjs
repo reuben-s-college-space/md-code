@@ -62,8 +62,10 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
     createWindow()
-    const filePath = getFilePathFromArgs(process.argv)
-    if (filePath) openFileInWindow(filePath)
+    mainWindow.webContents.once('did-finish-load', () => {
+      const filePath = getFilePathFromArgs(process.argv)
+      if (filePath) openFileInWindow(filePath)
+    })
   })
 }
 
