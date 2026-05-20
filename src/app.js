@@ -12,6 +12,7 @@ let activeTab = null
 let editorPanes = []
 let _syncScroll = true
 let recentFiles = []
+let folderEntries = {}
 try { recentFiles = JSON.parse(localStorage.getItem('md-studio-recent') || '[]') } catch(e) { recentFiles = [] }
 
 marked.setOptions({ breaks: true, gfm: true, headerIds: false, mangle: false })
@@ -287,54 +288,72 @@ $('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') { $(
 
 $('btn-copy-html').addEventListener('click', () => { if (!activeTab || !activeTab.editorEl) return; navigator.clipboard.writeText(activeTab.editorEl.innerText).then(() => { $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'check'; setTimeout(() => $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'content_copy', 1500) }) })
 
+async function openFolderEntry(entry) {
+    const existing = editorPanes.find(t => t.name === entry.name)
+    if (existing) { activateTab(existing.id); return }
+    try {
+        const file = await entry.getFile()
+        const content = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.markdown') ? await file.text() : '[Binary file - preview not available]'
+        const state = newTabState(entry.name, content, null)
+        editorPanes.push(state)
+        state.tabEl = renderTabDOM(state)
+        activateTab(state.id)
+        addRecent(entry.name)
+    } catch (e) {
+        console.error(e)
+        alert('Could not open file: ' + entry.name)
+    }
+}
+
 $('btn-open-folder')?.addEventListener('click', async () => {
     if (window.showDirectoryPicker) {
         try {
             const dirHandle = await window.showDirectoryPicker()
             $('workspace-path').textContent = dirHandle.name
-            const supportedExts = ['.md', '.markdown', '.txt', '.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg']
-            const unsupportedFiles = []
             const fileEntries = []
             for await (const entry of dirHandle.values()) {
                 if (entry.kind === 'file') {
                     const ext = '.' + entry.name.split('.').pop().toLowerCase()
-                    if (supportedExts.includes(ext)) {
+                    if (ext === '.md' || ext === '.markdown') {
                         fileEntries.push(entry)
-                    } else {
-                        unsupportedFiles.push(entry.name)
                     }
                 }
             }
-            if (unsupportedFiles.length > 0) {
-                const uniqueUnsupported = [...new Set(unsupportedFiles.map(f => '.' + f.split('.').pop().toLowerCase()))]
-                alert('Unsupported file formats in folder:\n' + uniqueUnsupported.join(', ') + '\n\nOnly the following formats are supported:\n.md, .markdown, .txt, .html, .pdf, .png, .jpg')
+            if (fileEntries.length === 0) {
+                alert('No Markdown (.md) files found in this folder.')
+                return
             }
-            const recentList = $('recent-list')
-            recentList.innerHTML = ''
+            folderEntries = {}
+            const list = $('folder-file-list')
+            list.innerHTML = ''
+            $('folder-name').textContent = dirHandle.name
             fileEntries.forEach(entry => {
+                folderEntries[entry.name] = entry
                 const li = document.createElement('li')
-                li.className = 'flex items-center gap-2 p-1 hover:bg-surface-container-high dark:hover:bg-surface-container rounded cursor-pointer group'
-                li.innerHTML = `<span class="material-symbols-outlined text-primary text-[16px]">description</span><span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim group-hover:text-on-surface dark:group-hover:text-inverse-on-surface">${esc(entry.name)}</span>`
-                li.addEventListener('click', async () => {
-                    const existing = editorPanes.find(t => t.name === entry.name)
-                    if (existing) { activateTab(existing.id); return }
-                    try {
-                        const file = await entry.getFile()
-                        const content = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.markdown') || file.name.endsWith('.txt') || file.name.endsWith('.html') || file.name.endsWith('.htm') ? await file.text() : '[Binary file - preview not available]'
-                        const state = newTabState(entry.name, content, null)
-                        editorPanes.push(state)
-                        state.tabEl = renderTabDOM(state)
-                        activateTab(state.id)
-                        addRecent(entry.name)
-                    } catch (e) {
-                        console.error(e)
-                        alert('Could not open file: ' + entry.name)
-                    }
-                })
-                recentList.appendChild(li)
+                li.className = 'flex items-center gap-2 p-1 rounded group'
+                li.innerHTML = `<input type="checkbox" class="folder-file-checkbox accent-primary dark:accent-primary-fixed cursor-pointer flex-shrink-0">
+                    <span class="material-symbols-outlined text-primary text-[16px] flex-shrink-0">description</span>
+                    <span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim">${esc(entry.name)}</span>`
+                li.querySelector('.folder-file-checkbox').dataset.filename = entry.name
+                list.appendChild(li)
             })
-            $('recent-files-list').classList.remove('hidden')
+            $('folder-files-section').classList.remove('hidden')
+            $('select-all-folder-files').checked = false
         } catch(e) { if (e.name !== 'AbortError') console.error(e) }
+    }
+})
+
+$('select-all-folder-files').addEventListener('change', () => {
+    const checked = $('select-all-folder-files').checked
+    document.querySelectorAll('#folder-file-list .folder-file-checkbox').forEach(cb => cb.checked = checked)
+})
+
+$('open-selected-files').addEventListener('click', async () => {
+    const checkboxes = document.querySelectorAll('#folder-file-list .folder-file-checkbox:checked')
+    if (checkboxes.length === 0) return alert('Select at least one file to open.')
+    for (const cb of checkboxes) {
+        const entry = folderEntries[cb.dataset.filename]
+        if (entry) await openFolderEntry(entry)
     }
 })
 

@@ -225,6 +225,18 @@
             <p class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim uppercase">Recent</p>
             <ul id="recent-list" class="mt-2 space-y-1"></ul>
         </div>
+        <div id="folder-files-section" class="hidden mt-2 px-4 py-1">
+            <div class="flex items-center justify-between mb-1">
+                <p class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim uppercase">Folder: <span id="folder-name" class="text-on-surface dark:text-inverse-on-surface"></span></p>
+                <label class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim cursor-pointer flex items-center gap-1">
+                    <input type="checkbox" id="select-all-folder-files" class="accent-primary dark:accent-primary-fixed"> All
+                </label>
+            </div>
+            <ul id="folder-file-list" class="mt-1 space-y-1 max-h-48 overflow-y-auto custom-scrollbar"></ul>
+            <button id="open-selected-files" class="mt-2 w-full px-3 py-1.5 text-system-ui-sm text-white dark:text-on-primary-container bg-primary dark:bg-primary-container rounded hover:bg-primary-container dark:hover:bg-primary-fixed-dim transition-colors flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined text-[16px]">download</span> Open Selected
+            </button>
+        </div>
         <div class="mt-6">
             <button id="btn-open-folder" class="w-full text-left text-on-surface-variant dark:text-secondary-fixed-dim flex items-center gap-3 px-4 py-2 hover:bg-surface-container-high dark:hover:bg-surface-container transition-all">
                 <span class="material-symbols-outlined">create_new_folder</span>

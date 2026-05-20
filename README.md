@@ -73,10 +73,11 @@ Open `http://localhost:5173` in your browser (Chrome/Edge recommended for best F
 ## Build
 
 ```bash
-npm run build
+npm run build            # web build → dist/
+npm run electron:build   # desktop build → release/MD-Code-*-Setup.exe
 ```
 
-Output is written to the `dist/` directory.
+Output for the web build goes to the `dist/` directory. The desktop build produces a portable Windows `.exe` via Electron and electron-builder.
 
 ## Deploy
 
@@ -98,8 +99,20 @@ The live site is hosted at [reuben-s-college-space.github.io/md-code](https://re
 | **PDF** | jsPDF |
 | **Archives** | JSZip |
 | **Downloads** | FileSaver.js |
+| **Desktop** | Electron 42, electron-builder |
 
 All dependencies are bundled locally — no CDN. The application is a single-page HTML file with ES modules.
+
+## Desktop
+
+MD Code also runs as a standalone Windows desktop application built with Electron.  
+Download the latest portable `.exe` from the [Releases](https://github.com/reuben-s-college-space/md-code/releases) page or build it yourself:
+
+```bash
+npm run electron:build
+```
+
+The build produces `release/MD-Code-*-Setup.exe` — no installation required, just download and run.
 
 ## Browser Support
 
@@ -109,6 +122,7 @@ All dependencies are bundled locally — no CDN. The application is a single-pag
 | File System Access API | ✓ 86+ | — | — |
 | File fallback (input/download) | ✓ | ✓ | ✓ |
 | Export (PDF, PNG, JPG) | ✓ | ✓ | ✓ |
+| Desktop (Electron) | ✓ | — | — |
 
 ## Design Philosophy
 
