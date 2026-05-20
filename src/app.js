@@ -11,9 +11,17 @@ let nextTabId = 1
 let activeTab = null
 let editorPanes = []
 let _syncScroll = true
-let recentFiles = []
+let fileHistory = []
 let folderEntries = {}
-try { recentFiles = JSON.parse(localStorage.getItem('md-studio-recent') || '[]') } catch(e) { recentFiles = [] }
+try {
+    const raw = JSON.parse(localStorage.getItem('md-studio-file-history') || '[]')
+    if (raw.length && typeof raw[0] === 'string') {
+        fileHistory = raw.map(n => ({ name: n, dirName: null, virtualPath: n, nativePath: null, lastOpened: Date.now() }))
+        localStorage.removeItem('md-studio-recent')
+    } else {
+        fileHistory = raw
+    }
+} catch(e) { fileHistory = [] }
 
 marked.setOptions({ breaks: true, gfm: true, headerIds: false, mangle: false })
 
@@ -122,7 +130,8 @@ async function openFile() {
             editorPanes.push(state)
             state.tabEl = renderTabDOM(state)
             activateTab(state.id)
-            addRecent(file.name)
+            const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+            recordFileOpen(file.name, null, nativePath)
         } catch(e) { if (e.name !== 'AbortError') console.error(e) }
     } else { $('file-input').click() }
 }
@@ -136,6 +145,7 @@ $('file-input').addEventListener('change', async e => {
     editorPanes.push(state)
     state.tabEl = renderTabDOM(state)
     activateTab(state.id)
+    recordFileOpen(file.name, null, null)
     e.target.value = ''
 })
 
@@ -172,10 +182,110 @@ function newFile() {
     activateTab(state.id)
 }
 
-function addRecent(name) { recentFiles = recentFiles.filter(f => f !== name); recentFiles.unshift(name); if (recentFiles.length > 10) recentFiles = recentFiles.slice(0, 10); localStorage.setItem('md-studio-recent', JSON.stringify(recentFiles)); renderRecentDOM() }
-function renderRecentDOM() { const list = $('recent-list'); if (!list) return; list.innerHTML = ''; recentFiles.forEach(name => { const li = document.createElement('li'); li.className = 'flex items-center gap-2 p-1 hover:bg-surface-container-high dark:hover:bg-surface-container rounded cursor-pointer group'; li.innerHTML = `<span class="material-symbols-outlined text-primary text-[16px]">description</span><span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim group-hover:text-on-surface dark:group-hover:text-inverse-on-surface">${esc(name)}</span>`; li.addEventListener('click', () => { alert('Use Ctrl+O to open files from disk.') }); list.appendChild(li) }) }
+function saveFileHistory() { localStorage.setItem('md-studio-file-history', JSON.stringify(fileHistory)) }
+
+function recordFileOpen(name, dirName, nativePath) {
+    const virtualPath = dirName ? dirName + '/' + name : name
+    const existing = fileHistory.find(f => f.virtualPath === virtualPath)
+    if (existing) {
+        existing.lastOpened = Date.now()
+        if (nativePath) existing.nativePath = nativePath
+    } else {
+        fileHistory.push({ name, dirName, virtualPath, nativePath: nativePath || null, lastOpened: Date.now() })
+    }
+    saveFileHistory()
+    renderRecentDOM()
+    renderExplorerDOM()
+}
+
+function renderRecentDOM() {
+    const list = $('recent-list')
+    if (!list) return
+    list.innerHTML = ''
+    const recent = [...fileHistory].sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 10)
+    recent.forEach(entry => {
+        const li = document.createElement('li')
+        li.className = 'flex items-center gap-2 p-1 hover:bg-surface-container-high dark:hover:bg-surface-container rounded cursor-pointer group'
+        li.innerHTML = `<span class="material-symbols-outlined text-primary text-[16px]">description</span><span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim group-hover:text-on-surface dark:group-hover:text-inverse-on-surface">${esc(entry.virtualPath)}</span>`
+        li.addEventListener('click', () => { maybeOpenFromHistory(entry) })
+        list.appendChild(li)
+    })
+}
 
 $('nav-recent').addEventListener('click', e => { e.stopPropagation(); $('recent-files-list').classList.toggle('hidden') })
+
+$('nav-explorer').addEventListener('click', () => {
+    const section = $('explorer-section')
+    const isOpen = !section.classList.contains('hidden')
+    section.classList.toggle('hidden')
+    $('nav-explorer').classList.toggle('border-l-2', isOpen)
+    $('nav-explorer').classList.toggle('border-primary', isOpen)
+    $('nav-explorer').classList.toggle('dark:border-primary-fixed', isOpen)
+    $('nav-explorer').classList.toggle('bg-surface', isOpen)
+    $('nav-explorer').classList.toggle('dark:bg-on-secondary-fixed-variant', isOpen)
+    if (!isOpen) {
+        $('recent-files-list').classList.add('hidden')
+        $('folder-files-section').classList.add('hidden')
+    }
+    renderExplorerDOM()
+})
+
+async function maybeOpenFromHistory(entry) {
+    const dirMatch = entry.dirName && entry.dirName === $('folder-name').textContent
+    const handle = dirMatch ? folderEntries[entry.name] : folderEntries[entry.name]
+    if (handle) { await openFolderEntry(handle, entry.dirName); return }
+    alert('"' + entry.virtualPath + '" is not currently accessible.\nUse Open Folder to browse and reopen it.')
+}
+
+function renderExplorerDOM() {
+    const container = $('explorer-content')
+    if (!container || $('explorer-section').classList.contains('hidden') && !container.children.length) return
+    container.innerHTML = ''
+    if (fileHistory.length === 0) {
+        container.innerHTML = '<p class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim italic">No files opened yet.</p>'
+        return
+    }
+    const groups = {}
+    fileHistory.forEach(entry => {
+        const key = entry.dirName || '__standalone__'
+        if (!groups[key]) groups[key] = { name: entry.dirName || 'Ungrouped', files: [] }
+        groups[key].files.push(entry)
+    })
+    const keys = Object.keys(groups).sort((a, b) => {
+        if (a === '__standalone__') return 1
+        if (b === '__standalone__') return -1
+        return a.localeCompare(b)
+    })
+    keys.forEach(key => {
+        const group = groups[key]
+        const groupEl = document.createElement('div')
+        groupEl.className = 'mb-1'
+        const sorted = [...group.files].sort((a, b) => b.lastOpened - a.lastOpened)
+        const header = document.createElement('div')
+        header.className = 'flex items-center gap-2 py-1 cursor-pointer select-none hover:bg-surface-container-high dark:hover:bg-surface-container rounded px-1'
+        header.innerHTML = `<span class="material-symbols-outlined text-[16px] text-on-surface-variant dark:text-secondary-fixed-dim">${key === '__standalone__' ? 'folder_off' : 'folder'}</span>
+            <span class="text-system-ui-sm text-on-surface dark:text-inverse-on-surface font-medium flex-1">${esc(group.name)}</span>
+            <span class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim">${group.files.length}</span>`
+        const body = document.createElement('div')
+        body.className = 'ml-5 space-y-0.5'
+        header.addEventListener('click', () => body.classList.toggle('hidden'))
+        sorted.forEach(entry => {
+            const fileEl = document.createElement('div')
+            fileEl.className = 'flex items-center gap-2 py-0.5 px-1 rounded cursor-pointer hover:bg-surface-container-high dark:hover:bg-surface-container group'
+            const pathDisplay = entry.nativePath || entry.virtualPath
+            fileEl.innerHTML = `<span class="material-symbols-outlined text-primary text-[14px] flex-shrink-0">description</span>
+                <div class="min-w-0 flex-1">
+                    <div class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim truncate">${esc(entry.name)}</div>
+                    <div class="text-[10px] text-outline dark:text-secondary-fixed-dim truncate">${esc(pathDisplay)}</div>
+                </div>`
+            fileEl.addEventListener('click', () => maybeOpenFromHistory(entry))
+            body.appendChild(fileEl)
+        })
+        groupEl.appendChild(header)
+        groupEl.appendChild(body)
+        container.appendChild(groupEl)
+    })
+}
 $('btn-open').addEventListener('click', openFile)
 $('btn-save').addEventListener('click', saveCurrentTab)
 
@@ -288,7 +398,7 @@ $('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') { $(
 
 $('btn-copy-html').addEventListener('click', () => { if (!activeTab || !activeTab.editorEl) return; navigator.clipboard.writeText(activeTab.editorEl.innerText).then(() => { $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'check'; setTimeout(() => $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'content_copy', 1500) }) })
 
-async function openFolderEntry(entry) {
+async function openFolderEntry(entry, dirName) {
     const existing = editorPanes.find(t => t.name === entry.name)
     if (existing) { activateTab(existing.id); return }
     try {
@@ -298,7 +408,8 @@ async function openFolderEntry(entry) {
         editorPanes.push(state)
         state.tabEl = renderTabDOM(state)
         activateTab(state.id)
-        addRecent(entry.name)
+        const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+        recordFileOpen(entry.name, dirName, nativePath)
     } catch (e) {
         console.error(e)
         alert('Could not open file: ' + entry.name)
@@ -351,9 +462,10 @@ $('select-all-folder-files').addEventListener('change', () => {
 $('open-selected-files').addEventListener('click', async () => {
     const checkboxes = document.querySelectorAll('#folder-file-list .folder-file-checkbox:checked')
     if (checkboxes.length === 0) return alert('Select at least one file to open.')
+    const dirName = $('folder-name').textContent
     for (const cb of checkboxes) {
         const entry = folderEntries[cb.dataset.filename]
-        if (entry) await openFolderEntry(entry)
+        if (entry) await openFolderEntry(entry, dirName)
     }
 })
 
@@ -513,4 +625,5 @@ document.addEventListener('keydown', e => { const ctrl = e.ctrlKey || e.metaKey;
 initTheme()
 restoreFontPrefs()
 renderRecentDOM()
+renderExplorerDOM()
 newFile()
