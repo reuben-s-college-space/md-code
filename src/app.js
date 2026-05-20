@@ -118,34 +118,40 @@ function syncCursorPos() { if (!activeTab || !activeTab.editorEl) return; const 
 
 function updateStatusBar() { if (!activeTab) return; const text = activeTab.content || ''; const words = text.trim() ? text.split(/\s+/).length : 0; $('status-words').textContent = words + ' words'; $('status-chars').textContent = text.length + ' chars' }
 
+async function openFileFromHandle(handle) {
+    const file = await handle.getFile()
+    const existing = editorPanes.find(t => t.name === file.name)
+    if (existing) { activateTab(existing.id); return }
+    const text = await file.text()
+    const state = newTabState(file.name, text, handle)
+    editorPanes.push(state)
+    state.tabEl = renderTabDOM(state)
+    activateTab(state.id)
+    const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+    recordFileOpen(file.name, null, nativePath)
+}
+
 async function openFile() {
     if (window.showOpenFilePicker) {
         try {
-            const [handle] = await window.showOpenFilePicker({ types: [{ description:'Markdown Files', accept:{ 'text/markdown': ['.md','.markdown','.mdx','.txt'] } }] })
-            const file = await handle.getFile()
-            const existing = editorPanes.find(t => t.name === file.name)
-            if (existing) { activateTab(existing.id); return }
-            const text = await file.text()
-            const state = newTabState(file.name, text, handle)
-            editorPanes.push(state)
-            state.tabEl = renderTabDOM(state)
-            activateTab(state.id)
-            const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
-            recordFileOpen(file.name, null, nativePath)
+            const handles = await window.showOpenFilePicker({ multiple: true, types: [{ description:'Markdown Files', accept:{ 'text/markdown': ['.md','.markdown','.mdx','.txt'] } }] })
+            for (const handle of handles) await openFileFromHandle(handle)
         } catch(e) { if (e.name !== 'AbortError') console.error(e) }
     } else { $('file-input').click() }
 }
 
 $('file-input').addEventListener('change', async e => {
-    const file = e.target.files[0]; if (!file) return
-    const existing = editorPanes.find(t => t.name === file.name)
-    if (existing) { activateTab(existing.id); e.target.value = ''; return }
-    const text = await file.text()
-    const state = newTabState(file.name, text, null)
-    editorPanes.push(state)
-    state.tabEl = renderTabDOM(state)
-    activateTab(state.id)
-    recordFileOpen(file.name, null, null)
+    const files = Array.from(e.target.files || [])
+    for (const file of files) {
+        const existing = editorPanes.find(t => t.name === file.name)
+        if (existing) { activateTab(existing.id); continue }
+        const text = await file.text()
+        const state = newTabState(file.name, text, null)
+        editorPanes.push(state)
+        state.tabEl = renderTabDOM(state)
+        activateTab(state.id)
+        recordFileOpen(file.name, null, null)
+    }
     e.target.value = ''
 })
 
