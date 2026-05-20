@@ -24,6 +24,18 @@
       "electron/**/*",
       "M (1).svg"
     ],
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown",
+        "description": "Markdown File"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown",
+        "description": "Markdown File"
+      }
+    ],
     "win": {
       "target": [
         {

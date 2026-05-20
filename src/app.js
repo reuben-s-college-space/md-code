@@ -626,6 +626,24 @@ $('batch-export-btn').addEventListener('click', async () => {
 
 window.addEventListener('beforeunload', e => { if (editorPanes.some(t => t.isDirty)) { e.preventDefault(); e.returnValue = '' } })
 
+if (window.electronAPI?.onOpenFile) {
+  window.electronAPI.onOpenFile(async (filePath) => {
+    try {
+      const content = await window.electronAPI.readFile(filePath)
+      const name = window.electronAPI.basename(filePath)
+      const existing = editorPanes.find(t => t.name === name)
+      if (existing) { activateTab(existing.id); return }
+      const state = newTabState(name, content, null)
+      editorPanes.push(state)
+      state.tabEl = renderTabDOM(state)
+      activateTab(state.id)
+      recordFileOpen(name, null, filePath)
+    } catch (e) {
+      console.error(e)
+    }
+  })
+}
+
 document.addEventListener('keydown', e => { const ctrl = e.ctrlKey || e.metaKey; if (ctrl && e.key === 's') { e.preventDefault(); if (e.shiftKey) saveCurrentTabAs(); else saveCurrentTab() } if (ctrl && e.key === 'o') { e.preventDefault(); openFile() } if (ctrl && e.key === 'n') { e.preventDefault(); newFile() } if (ctrl && e.key === 'b') { e.preventDefault(); wrapSelection('**','**') } if (ctrl && e.key === 'i') { e.preventDefault(); wrapSelection('*','*') } if (ctrl && e.key === 'd' && !e.shiftKey) { e.preventDefault(); wrapSelection('~~','~~') } if (ctrl && e.key === 'h') { e.preventDefault(); insertLinePrefix('# ') } if (ctrl && e.key === '`') { e.preventDefault(); wrapSelection('`','`') } if (ctrl && e.shiftKey && e.key === 'K') { e.preventDefault(); insertAtCursor('\n```\n', '\n```\n', 'code here') } if (ctrl && e.key === 'k' && !e.shiftKey) { e.preventDefault(); wrapSelection('[','](url)') } if (ctrl && e.key === 'l' && !e.shiftKey) { e.preventDefault(); insertLinePrefix('- ') } if (ctrl && e.shiftKey && e.key === 'L') { e.preventDefault(); insertLinePrefix('1. ') } if (ctrl && e.key === 'q') { e.preventDefault(); insertLinePrefix('> ') } if (ctrl && e.key === 'f') { e.preventDefault(); toggleFind() } if (e.key === 'Escape') { closeAllMenus(); if (!$('find-replace-bar').classList.contains('hidden')) $('find-replace-bar').classList.add('hidden'); if (settingsOpen) toggleSettings(false); if ($('batch-modal').classList.contains('show')) closeBatchModal() } })
 
 initTheme()
