@@ -7,12 +7,14 @@ import './styles.css'
 
 const $ = id => document.getElementById(id)
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+const SIDEBAR_MIN = 180, SIDEBAR_MAX = 500, SIDEBAR_DEFAULT = 260
 let nextTabId = 1
 let activeTab = null
 let editorPanes = []
 let _syncScroll = true
 let fileHistory = []
 let folderEntries = {}
+let sidebarWidth = SIDEBAR_DEFAULT
 try {
     const raw = JSON.parse(localStorage.getItem('md-studio-file-history') || '[]')
     if (raw.length && typeof raw[0] === 'string') {
@@ -82,7 +84,7 @@ function mountEditor(state) {
     const editorWrap = document.createElement('div')
     editorWrap.id = 'editor-pane-content'
     editorWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-6 font-editor-text text-editor-text text-on-surface dark:text-inverse-on-surface min-h-0 focus:outline-none'
-    editorWrap.style.outline = 'none'; editorWrap.style.tabSize = '4'; editorWrap.style.whiteSpace = 'pre-wrap'; editorWrap.style.wordWrap = 'break-word'; editorWrap.style.userSelect = 'text'
+    editorWrap.style.outline = 'none'; editorWrap.style.tabSize = '4'; editorWrap.style.MozTabSize = '4'; editorWrap.style.whiteSpace = 'pre-wrap'; editorWrap.style.wordWrap = 'break-word'; editorWrap.style.userSelect = 'text'
     editorWrap.contentEditable = true; editorWrap.spellcheck = true
     editorWrap.innerText = state.content
     editorPane.appendChild(editorWrap)
@@ -237,8 +239,7 @@ $('nav-explorer').addEventListener('click', () => {
 })
 
 async function maybeOpenFromHistory(entry) {
-    const dirMatch = entry.dirName && entry.dirName === $('folder-name').textContent
-    const handle = dirMatch ? folderEntries[entry.name] : folderEntries[entry.name]
+    const handle = folderEntries[entry.name]
     if (handle) { await openFolderEntry(handle, entry.dirName); return }
     alert('"' + entry.virtualPath + '" is not currently accessible.\nUse Open Folder to browse and reopen it.')
 }
@@ -377,7 +378,7 @@ async function handleMenuAction(name) {
         case 'ul': insertLinePrefix('- '); break
         case 'ol': insertLinePrefix('1. '); break
         case 'blockquote': insertLinePrefix('> '); break
-        case 'hr': insertAtCursor('\n---\n'); break
+        case 'hr': insertAtCursor('\n---\n', ''); break
         case 'find': toggleFind(); break
         case 'view-editor': $('editor-pane').style.display='flex'; $('preview-pane').style.display='none'; $('gutter').style.display='none'; break
         case 'view-split': $('editor-pane').style.display='flex'; $('preview-pane').style.display='flex'; $('gutter').style.display='block'; break
@@ -475,7 +476,6 @@ $('open-selected-files').addEventListener('click', async () => {
     }
 })
 
-document.getElementById('gutter').addEventListener('mousedown', e => { e.preventDefault(); document.getElementById('gutter').classList.add('dragging'); const startX = e.clientX; const startW = $('editor-pane').offsetWidth; const total = $('workspace').offsetWidth; const move = e => { const dx = e.clientX - startX; let w = startW + dx; const min = 200, max = total - 200; w = Math.max(min, Math.min(max, w)); const pct = (w / total) * 100; $('editor-pane').style.flex = 'none'; $('editor-pane').style.width = pct + '%'; $('preview-pane').style.flex = 'none'; $('preview-pane').style.width = (100 - pct) + '%' }; const up = () => { document.getElementById('gutter').classList.remove('dragging'); localStorage.setItem('md-studio-split', $('editor-pane').style.width); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }; document.addEventListener('mousemove', move); document.addEventListener('mouseup', up) })
 
 function initTheme() { const saved = localStorage.getItem('md-studio-theme'); if (saved === 'dark') { document.documentElement.classList.add('dark'); $('theme-icon').textContent = 'light_mode'; $('settings-theme-icon').textContent = 'light_mode' } else { document.documentElement.classList.remove('dark'); $('theme-icon').textContent = 'dark_mode'; $('settings-theme-icon').textContent = 'dark_mode' } }
 $('theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = marked.parse(activeTab.content)) } })
@@ -653,16 +653,12 @@ async function initApp() {
   renderRecentDOM()
   renderExplorerDOM()
 
-  // Migrate old localStorage keys (md-studio-sidebar-collapsed / md-studio-editor-collapsed) to new three-state keys
-  const oldSidebar = localStorage.getItem('md-studio-sidebar-collapsed')
-  if (oldSidebar && !localStorage.getItem('md-studio-sidebar-state')) {
-    localStorage.setItem('md-studio-sidebar-state', oldSidebar === '1' ? 'collapsed' : 'normal')
-    localStorage.removeItem('md-studio-sidebar-collapsed')
-  }
-  const oldEditor = localStorage.getItem('md-studio-editor-collapsed')
-  if (oldEditor && !localStorage.getItem('md-studio-editor-state')) {
-    localStorage.setItem('md-studio-editor-state', oldEditor === '1' ? 'collapsed' : 'normal')
-    localStorage.removeItem('md-studio-editor-collapsed')
+  // Remove legacy sidebar state keys
+  localStorage.removeItem('md-studio-sidebar-state')
+  const old3Editor = localStorage.getItem('md-studio-editor-state')
+  if (old3Editor && !localStorage.getItem('md-studio-preview-collapsed')) {
+    if (old3Editor !== 'normal') localStorage.setItem('md-studio-preview-collapsed', '1')
+    localStorage.removeItem('md-studio-editor-state')
   }
 
   const openFileParam = new URLSearchParams(window.location.search).get('openFile')
@@ -689,94 +685,136 @@ async function initApp() {
     newFile()
   }
 
-  // Restore sidebar state
-  const sidebarState = localStorage.getItem('md-studio-sidebar-state') || 'normal'
-  if (sidebarState !== 'normal') {
-    document.body.classList.add(`sidebar-${sidebarState}`)
+  // Restore sidebar width
+  const saved = parseInt(localStorage.getItem('md-studio-sidebar-width'), 10)
+  if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
+    setSidebarWidth(saved)
   }
-  updateSidebarToggleIcon(sidebarState)
 
-  // Restore editor state
-  const editorState = localStorage.getItem('md-studio-editor-state') || 'normal'
-  if (editorState !== 'normal') {
-    document.body.classList.add(`editor-${editorState}`)
+  // Restore preview collapsed state
+  if (localStorage.getItem('md-studio-preview-collapsed')) {
+    document.body.classList.add('preview-collapsed')
   }
-  updateEditorToggleIcon(editorState)
+  updatePreviewToggleIcon()
+
+  // Restore center split
+  const savedSplit = localStorage.getItem('md-studio-split')
+  if (savedSplit) {
+    const pct = parseFloat(savedSplit)
+    if (pct > 0 && pct < 100) {
+      $('editor-pane').style.flex = 'none'
+      $('editor-pane').style.width = pct + '%'
+      $('preview-pane').style.flex = 'none'
+      $('preview-pane').style.width = (100 - pct) + '%'
+    }
+  }
+
+  // Mobile fallback — auto collapse preview
+  const mq = window.matchMedia('(max-width: 768px)')
+  const handleMobile = e => {
+    if (e.matches) {
+      document.body.classList.add('preview-collapsed')
+    }
+  }
+  mq.addEventListener('change', handleMobile)
+  handleMobile(mq)
+  updatePreviewToggleIcon()
 }
 initApp()
 
-function cycleSidebarState() {
-  const currentState = localStorage.getItem('md-studio-sidebar-state') || 'normal'
-  let nextState
-  if (currentState === 'normal') nextState = 'compact'
-  else if (currentState === 'compact') nextState = 'collapsed'
-  else nextState = 'normal'
-
-  document.body.classList.remove('sidebar-normal', 'sidebar-compact', 'sidebar-collapsed')
-  if (nextState !== 'normal') {
-    document.body.classList.add(`sidebar-${nextState}`)
-  }
-  localStorage.setItem('md-studio-sidebar-state', nextState)
-  updateSidebarToggleIcon(nextState)
+function setSidebarWidth(px) {
+  sidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, px))
+  $('sidebar').style.width = sidebarWidth + 'px'
+  $('main-content').style.marginLeft = sidebarWidth + 'px'
+  $('sidebar-resizer').style.left = sidebarWidth + 'px'
 }
 
-function cycleEditorState() {
-  const currentState = localStorage.getItem('md-studio-editor-state') || 'normal'
-  let nextState
-  if (currentState === 'normal') nextState = 'compact'
-  else if (currentState === 'compact') nextState = 'collapsed'
-  else nextState = 'normal'
-
-  document.body.classList.remove('editor-normal', 'editor-compact', 'editor-collapsed')
-  if (nextState !== 'normal') {
-    document.body.classList.add(`editor-${nextState}`)
-  }
-  localStorage.setItem('md-studio-editor-state', nextState)
-  updateEditorToggleIcon(nextState)
+function togglePreview() {
+  const collapsed = document.body.classList.toggle('preview-collapsed')
+  localStorage.setItem('md-studio-preview-collapsed', collapsed ? '1' : '')
+  updatePreviewToggleIcon()
+}
+function updatePreviewToggleIcon() {
+  const icon = document.querySelector('#preview-toggle-btn .material-symbols-outlined')
+  if (icon) icon.textContent = document.body.classList.contains('preview-collapsed') ? 'visibility_off' : 'visibility'
 }
 
-function updateSidebarToggleIcon(state) {
-  const icon = document.querySelector('#sidebar-toggle-btn .material-symbols-outlined')
-  if (!icon) return
-  // Determine icon based on state
-  if (!state) state = localStorage.getItem('md-studio-sidebar-state') || 'normal'
-  switch (state) {
-    case 'normal':
-      icon.textContent = 'menu_open'
-      break
-    case 'compact':
-      icon.textContent = 'menu' // or another icon like 'format_align_center'
-      break
-    case 'collapsed':
-      icon.textContent = 'more_vert' // or 'menu' but maybe different
-      break
-    default:
-      icon.textContent = 'menu_open'
-  }
-}
+// Sidebar resizer
+;(() => {
+  const resizer = document.getElementById('sidebar-resizer')
+  if (!resizer) return
+  resizer.addEventListener('pointerdown', e => {
+    e.preventDefault()
+    resizer.setPointerCapture(e.pointerId)
+    resizer.classList.add('dragging')
+    document.body.classList.add('dragging')
+    const startX = e.clientX
+    const startW = sidebarWidth
+    const move = e => {
+      const dx = e.clientX - startX
+      setSidebarWidth(startW + dx)
+    }
+    const up = e => {
+      resizer.classList.remove('dragging')
+      document.body.classList.remove('dragging')
+      localStorage.setItem('md-studio-sidebar-width', sidebarWidth)
+      resizer.removeEventListener('pointermove', move)
+      resizer.removeEventListener('pointerup', up)
+    }
+    resizer.addEventListener('pointermove', move)
+    resizer.addEventListener('pointerup', up)
+  })
+})()
 
-function updateEditorToggleIcon(state) {
-  const icon = document.querySelector('#editor-toggle-btn .material-symbols-outlined')
-  if (!icon) return
-  if (!state) state = localStorage.getItem('md-studio-editor-state') || 'normal'
-  switch (state) {
-    case 'normal':
-      icon.textContent = 'format_align_left' // or something indicating full width
-      break
-    case 'compact':
-      icon.textContent = 'format_align_center' // or 'view_agenda'
-      break
-    case 'collapsed':
-      icon.textContent = 'format_align_right' // or 'view_list'
-      break
-    default:
-      icon.textContent = 'format_align_left'
-  }
-}
+// Enhanced center gutter resizer (pointer events + double-click reset)
+;(() => {
+  const gutter = document.getElementById('gutter')
+  if (!gutter) return
+  // Double-click → 50/50 split
+  gutter.addEventListener('dblclick', e => {
+    e.preventDefault()
+    $('editor-pane').style.flex = 'none'
+    $('editor-pane').style.width = '50%'
+    $('preview-pane').style.flex = 'none'
+    $('preview-pane').style.width = '50%'
+    localStorage.setItem('md-studio-split', '50%')
+  })
+  gutter.addEventListener('pointerdown', e => {
+    e.preventDefault()
+    gutter.setPointerCapture(e.pointerId)
+    gutter.classList.add('dragging')
+    document.body.classList.add('dragging')
+    const startX = e.clientX
+    const total = $('workspace').offsetWidth
+    const getEditorPct = () => {
+      const w = $('editor-pane').offsetWidth
+      return (w / total) * 100
+    }
+    const startPct = getEditorPct()
+    const move = e => {
+      const dx = e.clientX - startX
+      const pctPerPx = 100 / total
+      let pct = startPct + (dx * pctPerPx)
+      pct = Math.max(15, Math.min(85, pct))
+      $('editor-pane').style.flex = 'none'
+      $('editor-pane').style.width = pct + '%'
+      $('preview-pane').style.flex = 'none'
+      $('preview-pane').style.width = (100 - pct) + '%'
+    }
+    const up = e => {
+      gutter.classList.remove('dragging')
+      document.body.classList.remove('dragging')
+      localStorage.setItem('md-studio-split', $('editor-pane').style.width)
+      gutter.removeEventListener('pointermove', move)
+      gutter.removeEventListener('pointerup', up)
+    }
+    gutter.addEventListener('pointermove', move)
+    gutter.addEventListener('pointerup', up)
+  })
+})()
 
+// Button wiring
 document.addEventListener('DOMContentLoaded', () => {
-  const sbBtn = document.getElementById('sidebar-toggle-btn')
-  if (sbBtn) sbBtn.addEventListener('click', cycleSidebarState)
-  const edBtn = document.getElementById('editor-toggle-btn')
-  if (edBtn) edBtn.addEventListener('click', cycleEditorState)
+  const pb = document.getElementById('preview-toggle-btn')
+  if (pb) pb.addEventListener('click', togglePreview)
 })
