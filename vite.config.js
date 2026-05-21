@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 
 export default defineConfig({
+  base: '/md-code/',
   root: '.',
-  base: './',
   build: {
     outDir: 'dist'
   }
