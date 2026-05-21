@@ -38,6 +38,16 @@
         "ext": "markdown",
         "name": "Markdown",
         "description": "Markdown File"
+      },
+      {
+        "ext": "mdx",
+        "name": "MDX",
+        "description": "MDX File"
+      },
+      {
+        "ext": "txt",
+        "name": "Text",
+        "description": "Text File"
       }
     ],
     "win": {
