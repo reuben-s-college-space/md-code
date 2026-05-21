@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MD Code - Visual Test Harness</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+h1 { color: #00d4ff; margin-bottom: 8px; }
+.subtitle { color: #888; margin-bottom: 24px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.card { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 16px; }
+.card h3 { color: #00d4ff; margin-bottom: 8px; font-size: 14px; }
+.card p { color: #aaa; font-size: 13px; margin-bottom: 12px; }
+.card label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.card input[type="checkbox"] { width: 18px; height: 18px; accent-color: #00d4ff; }
+.card.checked { border-color: #00d4ff; background: #0f3460; }
+.status { margin-top: 24px; padding: 12px; background: #16213e; border-radius: 8px; text-align: center; font-size: 14px; color: #ff4444; }
+.status.all { color: #00ff88; }
+</style>
+</head>
+<body>
+<h1>MD Code - Visual Test Harness</h1>
+<p class="subtitle">Manual verification tests. Check each box after verifying.</p>
+<div class="grid">
+  <div class="test-card"><h3>1. Preview pane visible</h3><p>Open via double-click on .md file. Preview should be visible.</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+  <div class="test-card"><h3>2. Toast on second-instance</h3><p>Double-click .md while running. Toast should show "Opened [filename]".</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+  <div class="test-card"><h3>3. Search/replace toggle</h3><p>Click search expand button. Find/replace panel toggles.</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+  <div class="test-card"><h3>4. Cursor position tracking</h3><p>Insert text via toolbar. Should insert at cursor, not end.</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+  <div class="test-card"><h3>5. File dedup by full path</h3><p>Open C:\README.md and D:\README.md. Both as separate tabs.</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+  <div class="test-card"><h3>6. IPC timing</h3><p>Double-click .md to launch. File should open during startup.</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+  <div class="test-card"><h3>7. Error alert</h3><p>Try opening non-existent file. Error alert should appear.</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+  <div class="test-card"><h3>8. PDF export cursor</h3><p>Export to PDF. Cursor position should not reset to Ln 1, Col 1.</p><label><input type="checkbox" onchange="u()"> Verified</label></div>
+</div>
+<div class="status" id="s">0 / 8 verified</div>
+<script>
+function u(){
+  var c=document.querySelectorAll('.test-card'),n=0;
+  c.forEach(function(x){var b=x.querySelector('input');b.checked?(x.classList.add('checked'),n++):x.classList.remove('checked');});
+  var el=document.getElementById('s');el.textContent=n+' / 8 verified';if(n===8){el.textContent='ALL TESTS VERIFIED!';el.className='status all';}
+}
+</script>
+</body>
+</html>

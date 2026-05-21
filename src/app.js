@@ -1,4 +1,5 @@
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import JSZip from 'jszip'
@@ -7,17 +8,49 @@ import './styles.css'
 
 const $ = id => document.getElementById(id)
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+const SIDEBAR_MIN = 180, SIDEBAR_MAX = 500, SIDEBAR_DEFAULT = 260
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms) } }
+
+// FIX P2-2: Toast notification system
+let _toastTimer = null
+function showToast(message) {
+    let toast = document.getElementById('toast-notification')
+    if (!toast) {
+        toast = document.createElement('div')
+        toast.id = 'toast-notification'
+        toast.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:6px;font-size:14px;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none;white-space:nowrap;'
+        document.body.appendChild(toast)
+    }
+    toast.textContent = message
+    toast.style.opacity = '1'
+    if (_toastTimer) clearTimeout(_toastTimer)
+    _toastTimer = setTimeout(() => { toast.style.opacity = '0' }, 2500)
+}
 let nextTabId = 1
 let activeTab = null
 let editorPanes = []
 let _syncScroll = true
-let recentFiles = []
-try { recentFiles = JSON.parse(localStorage.getItem('md-studio-recent') || '[]') } catch(e) { recentFiles = [] }
+let fileHistory = []
+let folderEntries = {}
+let sidebarWidth = SIDEBAR_DEFAULT
+let _findIndex = 0
+let _findMatches = []
+try {
+    const raw = JSON.parse(localStorage.getItem('md-studio-file-history') || '[]')
+    if (raw.length && typeof raw[0] === 'string') {
+        fileHistory = raw.map(n => ({ name: n, dirName: null, virtualPath: n, nativePath: null, lastOpened: Date.now() }))
+        localStorage.removeItem('md-studio-recent')
+    } else {
+        fileHistory = raw
+    }
+} catch(e) { fileHistory = [] }
 
 marked.setOptions({ breaks: true, gfm: true, headerIds: false, mangle: false })
 
 function newTabState(name, content = '', handle = null) {
-    return { id: nextTabId++, name, content, handle, isDirty: false, editorEl: null, previewEl: null, tabEl: null }
+    const state = { id: nextTabId++, name, content, handle, isDirty: false, editorEl: null, previewEl: null, tabEl: null }
+    state._debouncedRenderPreview = debounce(() => { if (state.previewEl) state.previewEl.innerHTML = DOMPurify.sanitize(marked.parse(state.content || '')) }, 150)
+    return state
 }
 
 function renderTabDOM(state, insertBeforeEl = null) {
@@ -56,7 +89,12 @@ function closeTab(id, confirmIfDirty) {
 
 function activateTab(id) {
     const prev = activeTab
-    if (prev) saveEditorState(prev)
+    if (prev) {
+        saveEditorState(prev)
+        // Detach DOM elements for caching
+        if (prev.editorEl && prev.editorEl.parentNode) prev.editorEl.remove()
+        if (prev.previewEl && prev.previewEl.parentNode) prev.previewEl.remove()
+    }
     const state = editorPanes.find(t => t.id === id)
     if (!state) return
     activeTab = state
@@ -64,83 +102,101 @@ function activateTab(id) {
     state.tabEl && state.tabEl.classList.add('active')
     mountEditor(state)
     updateStatusBar()
+    // Set cursor to editor start after tab switch (FIX P2-2)
+    const editorEl = state.editorEl; if (editorEl) { const range = document.createRange(); range.setStart(editorEl, 0); range.collapse(true); const sel = window.getSelection(); if (sel) { sel.removeAllRanges(); sel.addRange(range) } }
+    syncCursorPos()
 }
 
 function mountEditor(state) {
     ;['editor-pane-content','preview-pane-content'].forEach(id2 => { const el = $(id2); if (el) el.remove() })
     const editorPane = $('editor-pane')
     editorPane.style.display = 'flex'
-    const editorWrap = document.createElement('div')
-    editorWrap.id = 'editor-pane-content'
-    editorWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-6 font-editor-text text-editor-text text-on-surface dark:text-inverse-on-surface min-h-0 focus:outline-none'
-    editorWrap.style.outline = 'none'; editorWrap.style.tabSize = '4'; editorWrap.style.whiteSpace = 'pre-wrap'; editorWrap.style.wordWrap = 'break-word'; editorWrap.style.userSelect = 'text'
-    editorWrap.contentEditable = true; editorWrap.spellcheck = true
-    editorWrap.innerText = state.content
-    editorPane.appendChild(editorWrap)
-    state.editorEl = editorWrap
     const previewPane = $('preview-pane')
     previewPane.style.display = 'flex'
-    const previewWrap = document.createElement('div')
-    previewWrap.id = 'preview-pane-content'
-    previewWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-10 bg-surface-container-lowest dark:bg-on-secondary-fixed min-h-0'
-    previewWrap.innerHTML = marked.parse(state.content)
-    previewPane.appendChild(previewWrap)
-    state.previewEl = previewWrap
-    const currentFont = localStorage.getItem('md-studio-font') || 'system-ui, sans-serif'
-    if (currentFont !== 'disable') {
-        editorWrap.style.fontFamily = currentFont
-        previewWrap.style.fontFamily = currentFont
+    if (state.editorEl) {
+        editorPane.appendChild(state.editorEl)
+    } else {
+        const editorWrap = document.createElement('div')
+        editorWrap.id = 'editor-pane-content'
+        editorWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-6 font-editor-text text-editor-text text-on-surface dark:text-inverse-on-surface min-h-0 focus:outline-none'
+        editorWrap.style.outline = 'none'; editorWrap.style.tabSize = '4'; editorWrap.style.MozTabSize = '4'; editorWrap.style.whiteSpace = 'pre-wrap'; editorWrap.style.wordWrap = 'break-word'; editorWrap.style.userSelect = 'text'
+        editorWrap.contentEditable = true; editorWrap.spellcheck = true
+        editorWrap.textContent = state.content
+        editorPane.appendChild(editorWrap)
+        state.editorEl = editorWrap
+        attachEditorEvents(editorWrap, state)
     }
-    attachEditorEvents(editorWrap, state)
-    syncCursorPos()
+    if (state.previewEl) {
+        previewPane.appendChild(state.previewEl)
+    } else {
+        const previewWrap = document.createElement('div')
+        previewWrap.id = 'preview-pane-content'
+        previewWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-10 bg-surface-container-lowest dark:bg-on-secondary-fixed min-h-0'
+        previewWrap.innerHTML = DOMPurify.sanitize(marked.parse(state.content))
+        previewPane.appendChild(previewWrap)
+        state.previewEl = previewWrap
+    }
 }
 
 function attachEditorEvents(el, state) {
-    el.addEventListener('input', () => { state.content = el.innerText; setDirty(state, true); state.previewEl && (state.previewEl.innerHTML = marked.parse(state.content || '')); syncCursorPos(); updateStatusBar() })
+    el.addEventListener('input', () => { state.content = el.textContent; setDirty(state, true); state._debouncedRenderPreview(); syncCursorPos(); _trackCursorOffset(); updateStatusBar() })
     el.addEventListener('keydown', e => { if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText',false,'    ') } })
     el.addEventListener('keyup', syncCursorPos)
-    el.addEventListener('click', syncCursorPos)
+    el.addEventListener('click', () => { syncCursorPos(); _trackCursorOffset() })
     el.addEventListener('scroll', () => { if (!_syncScroll || !state.previewEl) return; const ratio = el.scrollTop / (el.scrollHeight - el.clientHeight); state.previewEl.scrollTop = ratio * (state.previewEl.scrollHeight - state.previewEl.clientHeight) })
 }
 
 function setDirty(state, dirty) { state.isDirty = dirty; const dot = state.tabEl && state.tabEl.querySelector('.dirty-dot'); if (dot) dot.style.display = dirty ? 'block' : 'none' }
-function saveEditorState(state) { if (state && state.editorEl) state.content = state.editorEl.innerText }
+function saveEditorState(state) { if (state && state.editorEl) state.content = state.editorEl.textContent }
 function syncCursorPos() { if (!activeTab || !activeTab.editorEl) return; const sel = window.getSelection(); if (!sel.rangeCount) return; const range = sel.getRangeAt(0); const pre = document.createRange(); pre.selectNodeContents(activeTab.editorEl); pre.setEnd(range.startContainer, range.startOffset); const lines = pre.toString().split('\n'); $('status-cursor').textContent = `Ln ${lines.length}, Col ${lines[lines.length-1].length+1}` }
 
 function updateStatusBar() { if (!activeTab) return; const text = activeTab.content || ''; const words = text.trim() ? text.split(/\s+/).length : 0; $('status-words').textContent = words + ' words'; $('status-chars').textContent = text.length + ' chars' }
 
+async function openFileFromHandle(handle) {
+    const file = await handle.getFile()
+    const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+    // FIX P2-5: Dedup by full native path when available, fallback to basename
+    const existing = nativePath ? editorPanes.find(t => t.nativePath === nativePath) : editorPanes.find(t => t.name === file.name)
+    if (existing) { activateTab(existing.id); return }
+    const text = await file.text()
+    const state = newTabState(file.name, text, handle)
+    if (nativePath) state.nativePath = nativePath
+    editorPanes.push(state)
+    state.tabEl = renderTabDOM(state)
+    activateTab(state.id)
+    recordFileOpen(file.name, null, nativePath)
+}
+
 async function openFile() {
     if (window.showOpenFilePicker) {
         try {
-            const [handle] = await window.showOpenFilePicker({ types: [{ description:'Markdown Files', accept:{ 'text/markdown': ['.md','.markdown','.mdx','.txt'] } }] })
-            const file = await handle.getFile()
-            const existing = editorPanes.find(t => t.name === file.name)
-            if (existing) { activateTab(existing.id); return }
-            const text = await file.text()
-            const state = newTabState(file.name, text, handle)
-            editorPanes.push(state)
-            state.tabEl = renderTabDOM(state)
-            activateTab(state.id)
-            addRecent(file.name)
+            const handles = await window.showOpenFilePicker({ multiple: true, types: [{ description:'Markdown Files', accept:{ 'text/markdown': ['.md','.markdown','.mdx','.txt'] } }] })
+            for (const handle of handles) await openFileFromHandle(handle)
         } catch(e) { if (e.name !== 'AbortError') console.error(e) }
     } else { $('file-input').click() }
 }
 
 $('file-input').addEventListener('change', async e => {
-    const file = e.target.files[0]; if (!file) return
-    const existing = editorPanes.find(t => t.name === file.name)
-    if (existing) { activateTab(existing.id); e.target.value = ''; return }
-    const text = await file.text()
-    const state = newTabState(file.name, text, null)
-    editorPanes.push(state)
-    state.tabEl = renderTabDOM(state)
-    activateTab(state.id)
+    const files = Array.from(e.target.files || [])
+    for (const file of files) {
+        const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+        // FIX P2-5: Dedup by full native path when available, fallback to basename
+        const existing = nativePath ? editorPanes.find(t => t.nativePath === nativePath) : editorPanes.find(t => t.name === file.name)
+        if (existing) { activateTab(existing.id); continue }
+        const text = await file.text()
+        const state = newTabState(file.name, text, null)
+        if (nativePath) state.nativePath = nativePath
+        editorPanes.push(state)
+        state.tabEl = renderTabDOM(state)
+        activateTab(state.id)
+        recordFileOpen(file.name, null, null)
+    }
     e.target.value = ''
 })
 
 function saveCurrentTab() {
     const state = activeTab; if (!state || !state.isDirty) return
-    const text = state.editorEl ? state.editorEl.innerText : state.content
+    const text = state.editorEl ? state.editorEl.textContent : state.content
     if (state.handle && state.handle.createWritable) {
         state.handle.createWritable().then(w => w.write(text).then(() => w.close())).then(() => { setDirty(state, false) }).catch(e => { console.error(e); saveCurrentTabAs() })
     } else { saveCurrentTabAs() }
@@ -148,7 +204,7 @@ function saveCurrentTab() {
 
 async function saveCurrentTabAs() {
     const state = activeTab; if (!state) return
-    const text = state.editorEl ? state.editorEl.innerText : state.content
+    const text = state.editorEl ? state.editorEl.textContent : state.content
     if (window.showSaveFilePicker) {
         try {
             const handle = await window.showSaveFilePicker({ suggestedName: state.name, types: [{ description:'Markdown Files', accept:{ 'text/markdown':[ '.md' ] } }] })
@@ -171,22 +227,124 @@ function newFile() {
     activateTab(state.id)
 }
 
-function addRecent(name) { recentFiles = recentFiles.filter(f => f !== name); recentFiles.unshift(name); if (recentFiles.length > 10) recentFiles = recentFiles.slice(0, 10); localStorage.setItem('md-studio-recent', JSON.stringify(recentFiles)); renderRecentDOM() }
-function renderRecentDOM() { const list = $('recent-list'); if (!list) return; list.innerHTML = ''; recentFiles.forEach(name => { const li = document.createElement('li'); li.className = 'flex items-center gap-2 p-1 hover:bg-surface-container-high dark:hover:bg-surface-container rounded cursor-pointer group'; li.innerHTML = `<span class="material-symbols-outlined text-primary text-[16px]">description</span><span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim group-hover:text-on-surface dark:group-hover:text-inverse-on-surface">${esc(name)}</span>`; li.addEventListener('click', () => { alert('Use Ctrl+O to open files from disk.') }); list.appendChild(li) }) }
+function saveFileHistory() { localStorage.setItem('md-studio-file-history', JSON.stringify(fileHistory)) }
+
+function recordFileOpen(name, dirName, nativePath) {
+    const virtualPath = dirName ? dirName + '/' + name : name
+    const existing = fileHistory.find(f => f.virtualPath === virtualPath)
+    if (existing) {
+        existing.lastOpened = Date.now()
+        if (nativePath) existing.nativePath = nativePath
+    } else {
+        fileHistory.push({ name, dirName, virtualPath, nativePath: nativePath || null, lastOpened: Date.now() })
+    }
+    saveFileHistory()
+    renderRecentDOM()
+    renderExplorerDOM()
+}
+
+function renderRecentDOM() {
+    const list = $('recent-list')
+    if (!list) return
+    list.innerHTML = ''
+    const recent = [...fileHistory].sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 10)
+    recent.forEach(entry => {
+        const li = document.createElement('li')
+        li.className = 'flex items-center gap-2 p-1 hover:bg-surface-container-high dark:hover:bg-surface-container rounded cursor-pointer group'
+        li.innerHTML = `<span class="material-symbols-outlined text-primary text-[16px]">description</span><span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim group-hover:text-on-surface dark:group-hover:text-inverse-on-surface">${esc(entry.virtualPath)}</span>`
+        li.addEventListener('click', () => { maybeOpenFromHistory(entry) })
+        list.appendChild(li)
+    })
+}
 
 $('nav-recent').addEventListener('click', e => { e.stopPropagation(); $('recent-files-list').classList.toggle('hidden') })
+
+$('nav-explorer').addEventListener('click', () => {
+    const section = $('explorer-section')
+    const isOpen = !section.classList.contains('hidden')
+    section.classList.toggle('hidden')
+    $('nav-explorer').classList.toggle('border-l-2', isOpen)
+    $('nav-explorer').classList.toggle('border-primary', isOpen)
+    $('nav-explorer').classList.toggle('dark:border-primary-fixed', isOpen)
+    $('nav-explorer').classList.toggle('bg-surface', isOpen)
+    $('nav-explorer').classList.toggle('dark:bg-on-secondary-fixed-variant', isOpen)
+    if (!isOpen) {
+        $('recent-files-list').classList.add('hidden')
+        $('folder-files-section').classList.add('hidden')
+    }
+    renderExplorerDOM()
+})
+
+async function maybeOpenFromHistory(entry) {
+    const handle = folderEntries[entry.name]
+    if (handle) { await openFolderEntry(handle, entry.dirName); return }
+    alert('"' + entry.virtualPath + '" is not currently accessible.\nUse Open Folder to browse and reopen it.')
+}
+
+function renderExplorerDOM() {
+    const container = $('explorer-content')
+    if (!container || ($('explorer-section').classList.contains('hidden') && !container.children.length)) return
+    container.innerHTML = ''
+    if (fileHistory.length === 0) {
+        container.innerHTML = '<p class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim italic">No files opened yet.</p>'
+        return
+    }
+    const groups = {}
+    fileHistory.forEach(entry => {
+        const key = entry.dirName || '__standalone__'
+        if (!groups[key]) groups[key] = { name: entry.dirName || 'Ungrouped', files: [] }
+        groups[key].files.push(entry)
+    })
+    const keys = Object.keys(groups).sort((a, b) => {
+        if (a === '__standalone__') return 1
+        if (b === '__standalone__') return -1
+        return a.localeCompare(b)
+    })
+    keys.forEach(key => {
+        const group = groups[key]
+        const groupEl = document.createElement('div')
+        groupEl.className = 'mb-1'
+        const sorted = [...group.files].sort((a, b) => b.lastOpened - a.lastOpened)
+        const header = document.createElement('div')
+        header.className = 'flex items-center gap-2 py-1 cursor-pointer select-none hover:bg-surface-container-high dark:hover:bg-surface-container rounded px-1'
+        header.innerHTML = `<span class="material-symbols-outlined text-[16px] text-on-surface-variant dark:text-secondary-fixed-dim">${key === '__standalone__' ? 'folder_off' : 'folder'}</span>
+            <span class="text-system-ui-sm text-on-surface dark:text-inverse-on-surface font-medium flex-1">${esc(group.name)}</span>
+            <span class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim">${group.files.length}</span>`
+        const body = document.createElement('div')
+        body.className = 'ml-5 space-y-0.5'
+        header.addEventListener('click', () => body.classList.toggle('hidden'))
+        sorted.forEach(entry => {
+            const fileEl = document.createElement('div')
+            fileEl.className = 'flex items-center gap-2 py-0.5 px-1 rounded cursor-pointer hover:bg-surface-container-high dark:hover:bg-surface-container group'
+            const pathDisplay = entry.nativePath || entry.virtualPath
+            fileEl.innerHTML = `<span class="material-symbols-outlined text-primary text-[14px] flex-shrink-0">description</span>
+                <div class="min-w-0 flex-1">
+                    <div class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim truncate">${esc(entry.name)}</div>
+                    <div class="text-[10px] text-outline dark:text-secondary-fixed-dim truncate">${esc(pathDisplay)}</div>
+                </div>`
+            fileEl.addEventListener('click', () => maybeOpenFromHistory(entry))
+            body.appendChild(fileEl)
+        })
+        groupEl.appendChild(header)
+        groupEl.appendChild(body)
+        container.appendChild(groupEl)
+    })
+}
 $('btn-open').addEventListener('click', openFile)
 $('btn-save').addEventListener('click', saveCurrentTab)
 
-function getTabContent() { const s = activeTab; if (!s) return ''; return s.editorEl ? s.editorEl.innerText : s.content }
+function getTabContent() { const s = activeTab; if (!s) return ''; return s.editorEl ? s.editorEl.textContent : s.content }
 function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href) }
-function getPreviewHTML(state) { return state.previewEl ? state.previewEl.innerHTML : marked.parse(state.content) }
+function getPreviewHTML(state) { return state.previewEl ? state.previewEl.innerHTML : DOMPurify.sanitize(marked.parse(state.content)) }
 
 async function collectStyles() {
     let css = ''
-    document.querySelectorAll('style').forEach(s => { css += s.textContent + '\n' })
+    const seen = new Set()
+    document.querySelectorAll('style').forEach(s => { const t = s.textContent; if (!seen.has(t)) { seen.add(t); css += t + '\n' } })
     const links = document.querySelectorAll('link[rel="stylesheet"]')
     for (const link of links) {
+        if (seen.has(link.href)) continue
+        seen.add(link.href)
         try {
             const res = await fetch(link.href)
             if (res.ok) css += await res.text() + '\n'
@@ -196,20 +354,7 @@ async function collectStyles() {
 }
 
 async function capturePreviewFull(state, scale) {
-    const sourceEl = document.getElementById('preview-pane-content')
-    if (sourceEl && sourceEl.innerHTML.trim()) {
-        const clone = sourceEl.cloneNode(true)
-        clone.style.cssText = 'position:absolute;left:-9999px;top:0;width:800px;overflow:visible;'
-        clone.classList.remove('overflow-y-auto', 'custom-scrollbar')
-        clone.style.padding = '0'
-        clone.style.background = 'transparent'
-        document.body.appendChild(clone)
-        await new Promise(resolve => setTimeout(resolve, 150))
-        const canvas = await html2canvas(clone, { scale: scale, useCORS: true, height: clone.scrollHeight, windowHeight: clone.scrollHeight })
-        document.body.removeChild(clone)
-        return canvas
-    }
-    const html = marked.parse(state.content || '')
+    const html = DOMPurify.sanitize(marked.parse(state.content || ''))
     const isDark = document.documentElement.classList.contains('dark')
     const wrapper = document.createElement('div')
     if (isDark) wrapper.className = 'dark'
@@ -227,15 +372,18 @@ async function capturePreviewFull(state, scale) {
     return canvas
 }
 
-async function exportHTML() { const md = getTabContent(); const html = marked.parse(md); const name = (activeTab ? activeTab.name : 'untitled').replace(/\.[^.]+$/,''); const styles = await collectStyles(); const doc = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>'; download(new Blob([doc],{type:'text/html'}), name + '.html') }
-async function exportPDF(state, scale) { state = state || activeTab; scale = scale || 3; if (!state || !state.content) return alert('Nothing to export.'); try { $('status-cursor').textContent = 'Generating PDF…'; const canvas = await capturePreviewFull(state, scale); const img = canvas.toDataURL('image/png'); const pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' }); const pw = pdf.internal.pageSize.getWidth(); const ph = (canvas.height * pw) / canvas.width; const pageH = pdf.internal.pageSize.getHeight(); const overlap = 6; let y = 0; let firstPage = true; while (y < ph) { if (!firstPage) pdf.addPage(); const off = firstPage ? 0 : overlap; pdf.addImage(img, 'PNG', 0, -(y - off), pw, ph); y += pageH; firstPage = false; } pdf.save(state.name.replace(/\.[^.]+$/,'') + '.pdf') } catch(e) { console.error(e); alert('PDF export failed.') } finally { $('status-cursor').textContent = 'Ln 1, Col 1' } }
+async function exportHTML() { const md = getTabContent(); const html = DOMPurify.sanitize(marked.parse(md)); const name = (activeTab ? activeTab.name : 'untitled').replace(/\.[^.]+$/,''); const styles = await collectStyles(); const doc = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>'; download(new Blob([doc],{type:'text/html'}), name + '.html') }
+async function exportPDF(state, scale) { state = state || activeTab; scale = scale || 3; if (!state || !state.content) return alert('Nothing to export.'); try { $('status-cursor').textContent = 'Generating PDF…'; const canvas = await capturePreviewFull(state, scale); const img = canvas.toDataURL('image/png'); const pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' }); const pw = pdf.internal.pageSize.getWidth(); const ph = (canvas.height * pw) / canvas.width; const pageH = pdf.internal.pageSize.getHeight(); const overlap = 6; let y = 0; let firstPage = true; while (y < ph) { if (!firstPage) pdf.addPage(); const off = firstPage ? 0 : overlap; pdf.addImage(img, 'PNG', 0, -(y - off), pw, ph); y += pageH; firstPage = false; } pdf.save(state.name.replace(/\.[^.]+$/,'') + '.pdf') } catch(e) { console.error(e); alert('PDF export failed.') } finally { syncCursorPos() } }
 async function exportImage(fmt, state, scale) { state = state || activeTab; scale = scale || 2; if (!state || !state.content) return alert('Nothing to export.'); try { const canvas = await capturePreviewFull(state, scale); canvas.toBlob(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = state.name.replace(/\.[^.]+$/,'') + '.' + fmt; a.click(); URL.revokeObjectURL(a.href) }, fmt==='jpg'?'image/jpeg':'image/png', 0.92) } catch(e) { console.error(e); alert('Image export failed.') } }
-function exportTXT(state) { state = state || activeTab; const md = state ? (state.editorEl ? state.editorEl.innerText : state.content) : ''; const name = state ? state.name.replace(/\.[^.]+$/,'') : 'untitled'; download(new Blob([md],{type:'text/plain'}), name + '.txt') }
+function exportTXT(state) { state = state || activeTab; const md = state ? (state.editorEl ? state.editorEl.textContent : state.content) : ''; const name = state ? state.name.replace(/\.[^.]+$/,'') : 'untitled'; download(new Blob([md],{type:'text/plain'}), name + '.txt') }
 
 function activeEditor() { const s = activeTab; return s ? s.editorEl : null }
-function insertAtCursor(before, after, placeholder='text') { const el = activeEditor(); if (!el) return; el.focus(); const sel = window.getSelection(); if (!sel.rangeCount) { el.innerText += before + placeholder + after; return } const range = sel.getRangeAt(0); const text = before + placeholder + after; const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, before.length); range.collapse(true); sel.removeAllRanges(); sel.addRange(range) }
-function wrapSelection(openTag, closeTag) { const el = activeEditor(); if (!el) return; el.focus(); const sel = window.getSelection(); const range = sel.rangeCount ? sel.getRangeAt(0) : null; const selected = range ? range.toString() : ''; const noSel = !sel.rangeCount || selected === ''; const text = noSel ? openTag + closeTag : openTag + selected + closeTag; if (range) { const node = document.createTextNode(text); range.deleteContents(); range.insertNode(node); if (!noSel) { range.setStart(node, openTag.length); range.setEnd(node, openTag.length + selected.length) } else { range.setStart(node, openTag.length); range.collapse(true) } } else { el.innerText += text } if (activeTab) setDirty(activeTab, true) }
-function insertLinePrefix(prefix) { const el = activeEditor(); const s = activeTab; if (!el || !s) return; const fullText = el.innerText; const off = getOffset(el); const pos = Math.min(off, fullText.length); let lineStart = fullText.lastIndexOf('\n', pos - 1) + 1; let lineEnd = fullText.indexOf('\n', pos); if (lineEnd === -1) lineEnd = fullText.length; const line = fullText.substring(lineStart, lineEnd); if (line.startsWith(prefix)) return; el.innerText = fullText.substring(0, lineStart) + prefix + line + fullText.substring(lineEnd); setDirty(s, true) }
+// FIX P1-2: Track last cursor position per editor for fallback insert
+let _lastCursorOffset = 0
+function _trackCursorOffset() { const el = activeEditor(); if (!el) return; const sel = window.getSelection(); if (!sel.rangeCount) return; const range = sel.getRangeAt(0).cloneRange(); range.selectNodeContents(el); range.setEnd(sel.anchorNode, sel.anchorOffset); _lastCursorOffset = range.toString().length }
+function insertAtCursor(before, after, placeholder='text') { const el = activeEditor(); if (!el) return; el.focus(); const sel = window.getSelection(); if (!sel.rangeCount) { const pos = Math.min(_lastCursorOffset, el.textContent.length); const full = el.textContent; el.textContent = full.substring(0, pos) + before + placeholder + after + full.substring(pos); _lastCursorOffset = pos + before.length + placeholder.length + after.length; const range = document.createRange(); if (el.firstChild) { range.setStart(el.firstChild, Math.min(_lastCursorOffset, el.textContent.length)); range.collapse(true); if (sel) { sel.removeAllRanges(); sel.addRange(range) } } return } const range = sel.getRangeAt(0); const text = before + placeholder + after; const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, before.length); range.collapse(true); sel.removeAllRanges(); sel.addRange(range) }
+function wrapSelection(openTag, closeTag) { const el = activeEditor(); if (!el) return; el.focus(); const sel = window.getSelection(); const range = sel.rangeCount ? sel.getRangeAt(0) : null; const selected = range ? range.toString() : ''; const noSel = !sel.rangeCount || selected === ''; const text = noSel ? openTag + closeTag : openTag + selected + closeTag; if (range) { const node = document.createTextNode(text); range.deleteContents(); range.insertNode(node); if (!noSel) { range.setStart(node, openTag.length); range.setEnd(node, openTag.length + selected.length) } else { range.setStart(node, openTag.length); range.collapse(true) } } else { el.textContent += text } if (activeTab) setDirty(activeTab, true) }
+function insertLinePrefix(prefix) { const el = activeEditor(); const s = activeTab; if (!el || !s) return; const fullText = el.textContent; const off = getOffset(el); const pos = Math.min(off, fullText.length); let lineStart = fullText.lastIndexOf('\n', pos - 1) + 1; let lineEnd = fullText.indexOf('\n', pos); if (lineEnd === -1) lineEnd = fullText.length; const line = fullText.substring(lineStart, lineEnd); if (line.startsWith(prefix)) return; el.textContent = fullText.substring(0, lineStart) + prefix + line + fullText.substring(lineEnd); const newOff = lineStart + prefix.length + (pos - lineStart); const range = document.createRange(); const sel = window.getSelection(); if (el.firstChild) { range.setStart(el.firstChild, Math.min(newOff, el.textContent.length)); range.collapse(true); if (sel) { sel.removeAllRanges(); sel.addRange(range) } }; setDirty(s, true) }
 function getOffset(el) { const sel = window.getSelection(); if (!sel || !sel.rangeCount) return 0; const range = sel.getRangeAt(0).cloneRange(); range.selectNodeContents(el); range.setEnd(sel.anchorNode, sel.anchorOffset); return range.toString().length }
 
 async function handleMenuAction(name) {
@@ -260,7 +408,7 @@ async function handleMenuAction(name) {
         case 'ul': insertLinePrefix('- '); break
         case 'ol': insertLinePrefix('1. '); break
         case 'blockquote': insertLinePrefix('> '); break
-        case 'hr': insertAtCursor('\n---\n'); break
+        case 'hr': insertAtCursor('\n---\n', ''); break
         case 'find': toggleFind(); break
         case 'view-editor': $('editor-pane').style.display='flex'; $('preview-pane').style.display='none'; $('gutter').style.display='none'; break
         case 'view-split': $('editor-pane').style.display='flex'; $('preview-pane').style.display='flex'; $('gutter').style.display='block'; break
@@ -276,73 +424,121 @@ function closeAllMenus() { document.querySelectorAll('.dropdown-menu').forEach(d
 document.querySelectorAll('.menu-btn').forEach(btn => { btn.addEventListener('click', e => { e.stopPropagation(); const drop = btn.nextElementSibling; if (!drop || !drop.classList.contains('dropdown-menu')) return; const wasOpen = drop.classList.contains('show'); closeAllMenus(); if (!wasOpen) { drop.classList.add('show'); btn.classList.add('bg-surface-container-highest','dark:bg-on-secondary-fixed-variant') } }) })
 document.addEventListener('click', e => { if (!e.target.closest('.menu-btn') && !e.target.closest('.dropdown-menu')) closeAllMenus() })
 
-function toggleFind() { const bar = $('find-replace-bar'); bar.classList.toggle('hidden'); if (!bar.classList.contains('hidden')) $('find-input').focus() }
+function _updateFindMatches() {
+  const q = $('find-input').value
+  if (!q || !activeTab || !activeTab.editorEl) { _findMatches = []; _findIndex = -1; return }
+  const text = activeTab.editorEl.textContent
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(escaped, 'gi')
+  _findMatches = []; let m
+  while ((m = regex.exec(text)) !== null) _findMatches.push({ index: m.index, length: m[0].length })
+  _findIndex = _findMatches.length > 0 ? 0 : -1
+}
+function _selectFindMatch(idx) {
+  if (!activeTab || !activeTab.editorEl || idx < 0 || idx >= _findMatches.length) return false
+  const m = _findMatches[idx]; const el = activeTab.editorEl; el.focus()
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false)
+  let node, offset = 0
+  while (node = walker.nextNode()) {
+    const len = node.textContent.length
+    if (offset + len > m.index) {
+      const startOff = m.index - offset
+      const range = document.createRange(); range.setStart(node, startOff); range.setEnd(node, startOff + m.length)
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range)
+      return true
+    }
+    offset += len
+  }
+  return false
+}
+function toggleFind() { const bar = $('find-replace-bar'); bar.classList.toggle('hidden'); if (!bar.classList.contains('hidden')) { $('find-input').focus(); _updateFindMatches(); _selectFindMatch(_findIndex) } }
 $('find-close').addEventListener('click', () => $('find-replace-bar').classList.add('hidden'))
-$('find-next').addEventListener('click', () => $('find-input').value && window.find($('find-input').value,false,false,true))
-$('find-prev').addEventListener('click', () => $('find-input').value && window.find($('find-input').value,false,true,true))
-$('find-input').addEventListener('input', () => { const q = $('find-input').value; if (!q || !activeTab || !activeTab.editorEl) { $('find-count').textContent = q && activeTab ? '0/0' : '0/0'; return }; const text = activeTab.editorEl.innerText; const matches = text.match(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi')); $('find-count').textContent = matches ? matches.length + '/' + matches.length : '0/0' })
-$('replace-one').addEventListener('click', () => { const f = $('find-input').value, r = $('replace-input').value; if (!f) return; window.find(f,false,false,true); document.execCommand('insertText',false,r); if (activeTab) { activeTab.content = activeTab.editorEl ? activeTab.editorEl.innerText : activeTab.content; setDirty(activeTab, true) } })
-$('replace-all').addEventListener('click', () => { const s = activeTab; const f = $('find-input').value, r = $('replace-input').value; if (!s || !f) return; s.content = (s.editorEl ? s.editorEl.innerText : s.content).replace(new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'), r); if (s.editorEl) s.editorEl.innerText = s.content; setDirty(s, true) })
-$('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') { $('find-replace-bar').classList.remove('hidden'); $('find-input').value = $('search-input').value; window.find($('search-input').value,false,false,true) } })
+$('find-next').addEventListener('click', () => { if (!$('find-input').value) return; _updateFindMatches(); if (_findMatches.length === 0) return; _findIndex = (_findIndex + 1) % _findMatches.length; _selectFindMatch(_findIndex); $('find-count').textContent = (_findIndex + 1) + '/' + _findMatches.length })
+$('find-prev').addEventListener('click', () => { if (!$('find-input').value) return; _updateFindMatches(); if (_findMatches.length === 0) return; _findIndex = (_findIndex - 1 + _findMatches.length) % _findMatches.length; _selectFindMatch(_findIndex); $('find-count').textContent = (_findIndex + 1) + '/' + _findMatches.length })
+$('find-input').addEventListener('input', () => { _updateFindMatches(); if (_findMatches.length > 0) { _selectFindMatch(0); $('find-count').textContent = '1/' + _findMatches.length } else { $('find-count').textContent = '0/0' } })
+$('replace-one').addEventListener('click', () => { const f = $('find-input').value, r = $('replace-input').value; if (!f) return; _updateFindMatches(); if (_findIndex < 0 || _findIndex >= _findMatches.length) return; const sel = window.getSelection(); if (!sel.rangeCount) return; if (!sel.toString()) { _selectFindMatch(_findIndex); if (!sel.toString()) return }; document.execCommand('insertText',false,r); if (activeTab) { activeTab.content = activeTab.editorEl ? activeTab.editorEl.textContent : activeTab.content; setDirty(activeTab, true) }; _updateFindMatches() })
+$('replace-all').addEventListener('click', () => { const s = activeTab; const f = $('find-input').value, r = $('replace-input').value; if (!s || !f) return; s.content = (s.editorEl ? s.editorEl.textContent : s.content).replace(new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'), r); if (s.editorEl) s.editorEl.textContent = s.content; setDirty(s, true) })
+$('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') { $('find-replace-bar').classList.remove('hidden'); $('find-input').value = $('search-input').value; _updateFindMatches(); _selectFindMatch(_findIndex) } })
 
-$('btn-copy-html').addEventListener('click', () => { if (!activeTab || !activeTab.editorEl) return; navigator.clipboard.writeText(activeTab.editorEl.innerText).then(() => { $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'check'; setTimeout(() => $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'content_copy', 1500) }) })
+$('btn-copy-html').addEventListener('click', () => { if (!activeTab || !activeTab.editorEl) return; navigator.clipboard.writeText(activeTab.editorEl.textContent).then(() => { $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'check'; setTimeout(() => $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'content_copy', 1500) }) })
+
+async function openFolderEntry(entry, dirName) {
+    try {
+        const file = await entry.getFile()
+        const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+        // FIX P2-5: Dedup by nativePath when available
+        const existing = nativePath ? editorPanes.find(t => t.nativePath === nativePath) : editorPanes.find(t => t.name === entry.name)
+        if (existing) { activateTab(existing.id); return }
+        const content = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.markdown') ? await file.text() : '[Binary file - preview not available]'
+        const state = newTabState(entry.name, content, null)
+        if (nativePath) state.nativePath = nativePath
+        editorPanes.push(state)
+        state.tabEl = renderTabDOM(state)
+        activateTab(state.id)
+        recordFileOpen(entry.name, dirName, nativePath)
+    } catch (e) {
+        console.error(e)
+        alert('Could not open file: ' + entry.name)
+    }
+}
 
 $('btn-open-folder')?.addEventListener('click', async () => {
     if (window.showDirectoryPicker) {
         try {
             const dirHandle = await window.showDirectoryPicker()
             $('workspace-path').textContent = dirHandle.name
-            const supportedExts = ['.md', '.markdown', '.txt', '.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg']
-            const unsupportedFiles = []
             const fileEntries = []
             for await (const entry of dirHandle.values()) {
                 if (entry.kind === 'file') {
                     const ext = '.' + entry.name.split('.').pop().toLowerCase()
-                    if (supportedExts.includes(ext)) {
+                    if (ext === '.md' || ext === '.markdown') {
                         fileEntries.push(entry)
-                    } else {
-                        unsupportedFiles.push(entry.name)
                     }
                 }
             }
-            if (unsupportedFiles.length > 0) {
-                const uniqueUnsupported = [...new Set(unsupportedFiles.map(f => '.' + f.split('.').pop().toLowerCase()))]
-                alert('Unsupported file formats in folder:\n' + uniqueUnsupported.join(', ') + '\n\nOnly the following formats are supported:\n.md, .markdown, .txt, .html, .pdf, .png, .jpg')
+            if (fileEntries.length === 0) {
+                alert('No Markdown (.md) files found in this folder.')
+                return
             }
-            const recentList = $('recent-list')
-            recentList.innerHTML = ''
+            folderEntries = {}
+            const list = $('folder-file-list')
+            list.innerHTML = ''
+            $('folder-name').textContent = dirHandle.name
             fileEntries.forEach(entry => {
+                folderEntries[entry.name] = entry
                 const li = document.createElement('li')
-                li.className = 'flex items-center gap-2 p-1 hover:bg-surface-container-high dark:hover:bg-surface-container rounded cursor-pointer group'
-                li.innerHTML = `<span class="material-symbols-outlined text-primary text-[16px]">description</span><span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim group-hover:text-on-surface dark:group-hover:text-inverse-on-surface">${esc(entry.name)}</span>`
-                li.addEventListener('click', async () => {
-                    const existing = editorPanes.find(t => t.name === entry.name)
-                    if (existing) { activateTab(existing.id); return }
-                    try {
-                        const file = await entry.getFile()
-                        const content = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.markdown') || file.name.endsWith('.txt') || file.name.endsWith('.html') || file.name.endsWith('.htm') ? await file.text() : '[Binary file - preview not available]'
-                        const state = newTabState(entry.name, content, null)
-                        editorPanes.push(state)
-                        state.tabEl = renderTabDOM(state)
-                        activateTab(state.id)
-                        addRecent(entry.name)
-                    } catch (e) {
-                        console.error(e)
-                        alert('Could not open file: ' + entry.name)
-                    }
-                })
-                recentList.appendChild(li)
+                li.className = 'flex items-center gap-2 p-1 rounded group'
+                li.innerHTML = `<input type="checkbox" class="folder-file-checkbox accent-primary dark:accent-primary-fixed cursor-pointer flex-shrink-0">
+                    <span class="material-symbols-outlined text-primary text-[16px] flex-shrink-0">description</span>
+                    <span class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim">${esc(entry.name)}</span>`
+                li.querySelector('.folder-file-checkbox').dataset.filename = entry.name
+                list.appendChild(li)
             })
-            $('recent-files-list').classList.remove('hidden')
+            $('folder-files-section').classList.remove('hidden')
+            $('select-all-folder-files').checked = false
         } catch(e) { if (e.name !== 'AbortError') console.error(e) }
     }
 })
 
-document.getElementById('gutter').addEventListener('mousedown', e => { e.preventDefault(); document.getElementById('gutter').classList.add('dragging'); const startX = e.clientX; const startW = $('editor-pane').offsetWidth; const total = $('workspace').offsetWidth; const move = e => { const dx = e.clientX - startX; let w = startW + dx; const min = 200, max = total - 200; w = Math.max(min, Math.min(max, w)); const pct = (w / total) * 100; $('editor-pane').style.flex = 'none'; $('editor-pane').style.width = pct + '%'; $('preview-pane').style.flex = 'none'; $('preview-pane').style.width = (100 - pct) + '%' }; const up = () => { document.getElementById('gutter').classList.remove('dragging'); localStorage.setItem('md-studio-split', $('editor-pane').style.width); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }; document.addEventListener('mousemove', move); document.addEventListener('mouseup', up) })
+$('select-all-folder-files').addEventListener('change', () => {
+    const checked = $('select-all-folder-files').checked
+    document.querySelectorAll('#folder-file-list .folder-file-checkbox').forEach(cb => cb.checked = checked)
+})
+
+$('open-selected-files').addEventListener('click', async () => {
+    const checkboxes = document.querySelectorAll('#folder-file-list .folder-file-checkbox:checked')
+    if (checkboxes.length === 0) return alert('Select at least one file to open.')
+    const dirName = $('folder-name').textContent
+    for (const cb of checkboxes) {
+        const entry = folderEntries[cb.dataset.filename]
+        if (entry) await openFolderEntry(entry, dirName)
+    }
+})
+
 
 function initTheme() { const saved = localStorage.getItem('md-studio-theme'); if (saved === 'dark') { document.documentElement.classList.add('dark'); $('theme-icon').textContent = 'light_mode'; $('settings-theme-icon').textContent = 'light_mode' } else { document.documentElement.classList.remove('dark'); $('theme-icon').textContent = 'dark_mode'; $('settings-theme-icon').textContent = 'dark_mode' } }
-$('theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = marked.parse(activeTab.content)) } })
-$('settings-theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode' })
+$('theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = DOMPurify.sanitize(marked.parse(activeTab.content))) } })
+$('settings-theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = DOMPurify.sanitize(marked.parse(activeTab.content))) } })
 
 function restoreFontPrefs() { const font = localStorage.getItem('md-studio-font') || 'system-ui, sans-serif'; const size = localStorage.getItem('md-studio-fontsize') || '15'; $('font-select').value = font; $('fontsize-select').value = size; applyFont(font); applySize(size) }
 function applyFont(font) {
@@ -407,30 +603,30 @@ $('batch-export-btn').addEventListener('click', async () => {
     const total = selectedStates.length
     let completed = 0
 
-    async function wrapHTML(md, name) { const html = marked.parse(md); const styles = await collectStyles(); return '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>' }
+    async function wrapHTML(md, name) { const html = DOMPurify.sanitize(marked.parse(md)); const styles = await collectStyles(); return '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>' }
 
         if (downloadMode === 'individual') {
             for (const state of selectedStates) {
-            progressText.textContent = `Exporting ${state.name}... (${completed + 1}/${total})`
-            progressBar.style.width = ((completed / total) * 100) + '%'
-            try {
-                switch (format) {
-                    case 'html': {
-                        const doc = await wrapHTML(state.content, state.name.replace(/\.[^.]+$/, ''))
-                        download(new Blob([doc], { type: 'text/html' }), state.name.replace(/\.[^.]+$/, '') + '.html')
-                        break
+                progressText.textContent = `Exporting ${state.name}... (${completed + 1}/${total})`
+                progressBar.style.width = ((completed / total) * 100) + '%'
+                try {
+                    switch (format) {
+                        case 'html': {
+                            const doc = await wrapHTML(state.content, state.name.replace(/\.[^.]+$/, ''))
+                            download(new Blob([doc], { type: 'text/html' }), state.name.replace(/\.[^.]+$/, '') + '.html')
+                            break
+                        }
+                        case 'pdf': await exportPDF(state, scale); break
+                        case 'png': await exportImage('png', state, scale); break
+                        case 'jpg': await exportImage('jpg', state, scale); break
+                        case 'txt': exportTXT(state); break
                     }
-                    case 'pdf': await exportPDF(state, scale); break
-                    case 'png': await exportImage('png', state, scale); break
-                    case 'jpg': await exportImage('jpg', state, scale); break
-                    case 'txt': exportTXT(state); break
-                }
-            } catch (e) { console.error(e) }
-            completed++
-            progressBar.style.width = ((completed / total) * 100) + '%'
-            await new Promise(r => setTimeout(r, 300))
-        }
-    } else {
+                } catch (e) { console.error(e) }
+                completed++
+                progressBar.style.width = ((completed / total) * 100) + '%'
+                await new Promise(r => setTimeout(r, 300))
+            }
+        } else {
         const zip = new JSZip()
         const folder = zip.folder('md-code-export')
         for (const state of selectedStates) {
@@ -489,9 +685,184 @@ $('batch-export-btn').addEventListener('click', async () => {
 
 window.addEventListener('beforeunload', e => { if (editorPanes.some(t => t.isDirty)) { e.preventDefault(); e.returnValue = '' } })
 
+if (window.electronAPI?.onOpenFile) {
+  window.electronAPI.onOpenFile(async (filePath) => {
+    try {
+      const content = await window.electronAPI.readFile(filePath)
+      if (content == null) { console.error('Failed to read file:', filePath); alert('Failed to open file: ' + filePath + '\nThe file may have been moved or deleted.'); return }
+      const name = window.electronAPI.basename(filePath)
+      // FIX P2-5: Dedup by full path when available from Electron IPC
+      const existing = editorPanes.find(t => t.nativePath === filePath || t.name === name)
+      if (existing) { activateTab(existing.id); return }
+      if (editorPanes.length === 1 && editorPanes[0].name === 'untitled.md' && !editorPanes[0].isDirty && !editorPanes[0].nativePath && (editorPanes[0].content === '' || (editorPanes[0].editorEl && editorPanes[0].editorEl.textContent === ''))) {
+        closeTab(editorPanes[0].id, false)
+      }
+      const state = newTabState(name, content, null)
+      state.nativePath = filePath
+      editorPanes.push(state)
+      state.tabEl = renderTabDOM(state)
+      activateTab(state.id)
+      recordFileOpen(name, null, filePath)
+      // FIX P2-2: Visual feedback that file was opened via second-instance
+      showToast('Opened ' + name)
+    } catch (e) {
+      console.error(e)
+    }
+  })
+}
+
 document.addEventListener('keydown', e => { const ctrl = e.ctrlKey || e.metaKey; if (ctrl && e.key === 's') { e.preventDefault(); if (e.shiftKey) saveCurrentTabAs(); else saveCurrentTab() } if (ctrl && e.key === 'o') { e.preventDefault(); openFile() } if (ctrl && e.key === 'n') { e.preventDefault(); newFile() } if (ctrl && e.key === 'b') { e.preventDefault(); wrapSelection('**','**') } if (ctrl && e.key === 'i') { e.preventDefault(); wrapSelection('*','*') } if (ctrl && e.key === 'd' && !e.shiftKey) { e.preventDefault(); wrapSelection('~~','~~') } if (ctrl && e.key === 'h') { e.preventDefault(); insertLinePrefix('# ') } if (ctrl && e.key === '`') { e.preventDefault(); wrapSelection('`','`') } if (ctrl && e.shiftKey && e.key === 'K') { e.preventDefault(); insertAtCursor('\n```\n', '\n```\n', 'code here') } if (ctrl && e.key === 'k' && !e.shiftKey) { e.preventDefault(); wrapSelection('[','](url)') } if (ctrl && e.key === 'l' && !e.shiftKey) { e.preventDefault(); insertLinePrefix('- ') } if (ctrl && e.shiftKey && e.key === 'L') { e.preventDefault(); insertLinePrefix('1. ') } if (ctrl && e.key === 'q') { e.preventDefault(); insertLinePrefix('> ') } if (ctrl && e.key === 'f') { e.preventDefault(); toggleFind() } if (e.key === 'Escape') { closeAllMenus(); if (!$('find-replace-bar').classList.contains('hidden')) $('find-replace-bar').classList.add('hidden'); if (settingsOpen) toggleSettings(false); if ($('batch-modal').classList.contains('show')) closeBatchModal() } })
 
-initTheme()
-restoreFontPrefs()
-renderRecentDOM()
-newFile()
+async function initApp() {
+  initTheme()
+  restoreFontPrefs()
+  renderRecentDOM()
+  renderExplorerDOM()
+
+  // Remove legacy sidebar state keys
+  localStorage.removeItem('md-studio-sidebar-state')
+  const old3Editor = localStorage.getItem('md-studio-editor-state')
+  if (old3Editor && !localStorage.getItem('md-studio-preview-collapsed')) {
+    if (old3Editor !== 'normal') localStorage.setItem('md-studio-preview-collapsed', '1')
+    localStorage.removeItem('md-studio-editor-state')
+  }
+
+  // Restore sidebar width
+  const saved = parseInt(localStorage.getItem('md-studio-sidebar-width'), 10)
+  if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
+    setSidebarWidth(saved)
+  }
+
+  // Restore preview collapsed state
+  if (localStorage.getItem('md-studio-preview-collapsed')) {
+    document.body.classList.add('preview-collapsed')
+  }
+  updatePreviewToggleIcon()
+
+  // Start with an empty tab (IPC will add file tab on top if "Open with")
+  newFile()
+
+  // Restore center split
+  const savedSplit = localStorage.getItem('md-studio-split')
+  if (savedSplit) {
+    const pct = parseFloat(savedSplit)
+    if (pct > 0 && pct < 100) {
+      $('editor-pane').style.flex = 'none'
+      $('editor-pane').style.width = pct + '%'
+      $('preview-pane').style.flex = 'none'
+      $('preview-pane').style.width = (100 - pct) + '%'
+    }
+  }
+
+  // Mobile fallback — auto collapse preview
+  const mq = window.matchMedia('(max-width: 768px)')
+  const handleMobile = e => {
+    if (e.matches) {
+      document.body.classList.add('preview-collapsed')
+    }
+  }
+  mq.addEventListener('change', handleMobile)
+  handleMobile(mq)
+  updatePreviewToggleIcon()
+}
+initApp()
+
+function setSidebarWidth(px) {
+  sidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, px))
+  $('sidebar').style.width = sidebarWidth + 'px'
+  $('main-content').style.marginLeft = sidebarWidth + 'px'
+  $('sidebar-resizer').style.left = sidebarWidth + 'px'
+}
+
+function togglePreview() {
+  const collapsed = document.body.classList.toggle('preview-collapsed')
+  localStorage.setItem('md-studio-preview-collapsed', collapsed ? '1' : '')
+  updatePreviewToggleIcon()
+}
+function updatePreviewToggleIcon() {
+  const icon = document.querySelector('#preview-toggle-btn .material-symbols-outlined')
+  if (icon) icon.textContent = document.body.classList.contains('preview-collapsed') ? 'visibility_off' : 'visibility'
+}
+
+// Sidebar resizer
+;(() => {
+  const resizer = document.getElementById('sidebar-resizer')
+  if (!resizer) return
+  resizer.addEventListener('pointerdown', e => {
+    e.preventDefault()
+    resizer.setPointerCapture(e.pointerId)
+    resizer.classList.add('dragging')
+    document.body.classList.add('dragging')
+    const startX = e.clientX
+    const startW = sidebarWidth
+    const move = e => {
+      const dx = e.clientX - startX
+      setSidebarWidth(startW + dx)
+    }
+    const up = e => {
+      resizer.classList.remove('dragging')
+      document.body.classList.remove('dragging')
+      localStorage.setItem('md-studio-sidebar-width', sidebarWidth)
+      resizer.removeEventListener('pointermove', move)
+      resizer.removeEventListener('pointerup', up)
+    }
+    resizer.addEventListener('pointermove', move)
+    resizer.addEventListener('pointerup', up)
+  })
+})()
+
+// Enhanced center gutter resizer (pointer events + double-click reset)
+;(() => {
+  const gutter = document.getElementById('gutter')
+  if (!gutter) return
+  // Double-click → 50/50 split
+  gutter.addEventListener('dblclick', e => {
+    e.preventDefault()
+    $('editor-pane').style.flex = 'none'
+    $('editor-pane').style.width = '50%'
+    $('preview-pane').style.flex = 'none'
+    $('preview-pane').style.width = '50%'
+    localStorage.setItem('md-studio-split', '50%')
+  })
+  gutter.addEventListener('pointerdown', e => {
+    e.preventDefault()
+    gutter.setPointerCapture(e.pointerId)
+    gutter.classList.add('dragging')
+    document.body.classList.add('dragging')
+    const startX = e.clientX
+    const total = $('workspace').offsetWidth
+    const getEditorPct = () => {
+      const w = $('editor-pane').offsetWidth
+      return (w / total) * 100
+    }
+    const startPct = getEditorPct()
+    const move = e => {
+      const dx = e.clientX - startX
+      const pctPerPx = 100 / total
+      let pct = startPct + (dx * pctPerPx)
+      pct = Math.max(15, Math.min(85, pct))
+      $('editor-pane').style.flex = 'none'
+      $('editor-pane').style.width = pct + '%'
+      $('preview-pane').style.flex = 'none'
+      $('preview-pane').style.width = (100 - pct) + '%'
+    }
+    const up = e => {
+      gutter.classList.remove('dragging')
+      document.body.classList.remove('dragging')
+      localStorage.setItem('md-studio-split', $('editor-pane').style.width)
+      gutter.removeEventListener('pointermove', move)
+      gutter.removeEventListener('pointerup', up)
+    }
+    gutter.addEventListener('pointermove', move)
+    gutter.addEventListener('pointerup', up)
+  })
+})()
+
+// Button wiring
+document.addEventListener('DOMContentLoaded', () => {
+  const pb = document.getElementById('preview-toggle-btn')
+  if (pb) pb.addEventListener('click', togglePreview)
+  // FIX P3: Search replace toggle button handler
+  const searchToggle = document.getElementById('search-replace-toggle')
+  if (searchToggle) searchToggle.addEventListener('click', () => { $('find-replace-bar').classList.toggle('hidden'); if (!$('find-replace-bar').classList.contains('hidden')) $('find-input').focus() })
+})

@@ -206,9 +206,9 @@
             <div class="w-8 h-8 rounded-full bg-primary dark:bg-primary-fixed-dim flex items-center justify-center">
                 <span class="material-symbols-outlined text-white dark:text-on-primary-fixed text-[18px]">work</span>
             </div>
-            <div>
+            <div class="flex-1 min-w-0">
                 <p class="font-system-ui-md text-system-ui-md font-bold text-on-surface dark:text-inverse-on-surface">Workspace</p>
-                <p id="workspace-path" class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim">No folder opened</p>
+                <p id="workspace-path" class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim truncate">No folder opened</p>
             </div>
         </div>
     </div>
@@ -221,9 +221,25 @@
             <span class="material-symbols-outlined">history</span>
             <span class="font-system-ui-sm">Recent Files</span>
         </div>
+        <div id="explorer-section" class="hidden mt-2 px-4 py-1">
+            <p class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim uppercase">Explorer</p>
+            <div id="explorer-content" class="mt-2 space-y-1 max-h-64 overflow-y-auto custom-scrollbar"></div>
+        </div>
         <div id="recent-files-list" class="mt-2 px-4 py-1 hidden">
             <p class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim uppercase">Recent</p>
             <ul id="recent-list" class="mt-2 space-y-1"></ul>
+        </div>
+        <div id="folder-files-section" class="hidden mt-2 px-4 py-1">
+            <div class="flex items-center justify-between mb-1">
+                <p class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim uppercase">Folder: <span id="folder-name" class="text-on-surface dark:text-inverse-on-surface"></span></p>
+                <label class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim cursor-pointer flex items-center gap-1">
+                    <input type="checkbox" id="select-all-folder-files" class="accent-primary dark:accent-primary-fixed"> All
+                </label>
+            </div>
+            <ul id="folder-file-list" class="mt-1 space-y-1 max-h-48 overflow-y-auto custom-scrollbar"></ul>
+            <button id="open-selected-files" class="mt-2 w-full px-3 py-1.5 text-system-ui-sm text-white dark:text-on-primary-container bg-primary dark:bg-primary-container rounded hover:bg-primary-container dark:hover:bg-primary-fixed-dim transition-colors flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined text-[16px]">download</span> Open Selected
+            </button>
         </div>
         <div class="mt-6">
             <button id="btn-open-folder" class="w-full text-left text-on-surface-variant dark:text-secondary-fixed-dim flex items-center gap-3 px-4 py-2 hover:bg-surface-container-high dark:hover:bg-surface-container transition-all">
@@ -239,7 +255,8 @@
         </button>
     </footer>
 </aside>
-<main class="ml-[260px] flex-1 flex flex-col bg-surface-container-low dark:bg-on-secondary-fixed min-w-0">
+<div id="sidebar-resizer" class="sidebar-resizer"></div>
+<main id="main-content" class="ml-[260px] flex-1 flex flex-col bg-surface-container-low dark:bg-on-secondary-fixed min-w-0">
     <div id="tab-bar" class="flex items-center bg-surface-container dark:bg-inverse-surface border-b border-outline-variant dark:border-on-secondary-fixed-variant h-[36px] overflow-x-auto no-scrollbar relative">
     </div>
     <div id="find-replace-bar" class="hidden flex items-center gap-2 px-4 py-2 bg-surface-container dark:bg-inverse-surface border-b border-outline-variant dark:border-on-secondary-fixed-variant">
@@ -269,6 +286,9 @@
             <div class="h-8 flex items-center px-4 bg-surface-container dark:bg-inverse-surface border-b border-outline-variant dark:border-on-secondary-fixed-variant justify-between shrink-0">
                 <span class="text-label-caps font-label-caps text-outline dark:text-secondary-fixed-dim uppercase">Live Preview</span>
                 <div class="flex gap-2">
+                    <button id="preview-toggle-btn" class="w-5 h-5 flex items-center justify-center hover:bg-surface-container-highest dark:hover:bg-on-secondary-fixed-variant rounded transition-colors" title="Toggle Preview">
+                        <span class="material-symbols-outlined text-[14px] text-outline dark:text-secondary-fixed-dim">visibility</span>
+                    </button>
                     <span class="material-symbols-outlined text-[16px] text-outline dark:text-secondary-fixed-dim cursor-pointer hover:text-primary dark:hover:text-primary-fixed" title="Desktop view">desktop_windows</span>
                     <span class="material-symbols-outlined text-[16px] text-outline dark:text-secondary-fixed-dim cursor-pointer hover:text-primary dark:hover:text-primary-fixed" id="btn-copy-html" title="Copy HTML">content_copy</span>
                 </div>
@@ -331,7 +351,7 @@
         </div>
     </div>
 </div>
-<input type="file" id="file-input" accept=".md,.markdown,.txt,.mdx" style="display:none"/>
+<input type="file" id="file-input" accept=".md,.markdown,.txt,.mdx" multiple style="display:none"/>
 <div id="batch-modal" class="batch-modal">
     <div class="batch-modal-content">
         <div class="batch-modal-header">
