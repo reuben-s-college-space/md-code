@@ -1,6 +1,6 @@
 {
   "name": "md-code",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Professional-grade markdown editor with live preview, multi-tab support, and export to HTML/PDF/PNG/JPG.",
   "private": true,
   "type": "module",
