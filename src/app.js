@@ -164,7 +164,6 @@ async function openFileFromHandle(handle) {
     editorPanes.push(state)
     state.tabEl = renderTabDOM(state)
     activateTab(state.id)
-    const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
     recordFileOpen(file.name, null, nativePath)
 }
 
