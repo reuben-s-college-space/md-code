@@ -22,8 +22,10 @@ function createWindow(filePathToOpen) {
 
   const fileToLoad = filePathToOpen || pendingOpenFile
   pendingOpenFile = null
-  const query = fileToLoad ? { query: { openFile: encodeURIComponent(fileToLoad) } } : {}
-  mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), query)
+  if (fileToLoad) {
+    pendingOpenFilesQueue.push(fileToLoad)
+  }
+  mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   mainWindow.on('page-title-updated', (e) => e.preventDefault())
 
   // FIX P0/P2: Wait for renderer to be ready before sending queued IPC files
@@ -55,14 +57,12 @@ function openFileInWindow(filePath) {
   mainWindow.focus()
 }
 
-// FIX P2-4: Added .mdx and .txt extensions; tightened path validation regex
 function getFilePathFromArgs(argv) {
+  const supported = ['.md', '.markdown', '.mdx', '.txt']
   return argv.slice(1).find(a => {
     if (a.startsWith('-')) return false
     const lower = a.toLowerCase()
-    if (!lower.endsWith('.md') && !lower.endsWith('.markdown') && !lower.endsWith('.mdx') && !lower.endsWith('.txt')) return false
-    // Tighter validation: drive letter path, Unix absolute, or UNC path
-    return /^[a-z]:[\\/]/.test(lower) || lower.startsWith('/') || lower.startsWith('\\\\')
+    return supported.some(ext => lower.endsWith(ext))
   })
 }
 

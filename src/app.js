@@ -694,6 +694,9 @@ if (window.electronAPI?.onOpenFile) {
       // FIX P2-5: Dedup by full path when available from Electron IPC
       const existing = editorPanes.find(t => t.nativePath === filePath || t.name === name)
       if (existing) { activateTab(existing.id); return }
+      if (editorPanes.length === 1 && editorPanes[0].name === 'untitled.md' && !editorPanes[0].isDirty && !editorPanes[0].nativePath && (editorPanes[0].content === '' || (editorPanes[0].editorEl && editorPanes[0].editorEl.textContent === ''))) {
+        closeTab(editorPanes[0].id, false)
+      }
       const state = newTabState(name, content, null)
       state.nativePath = filePath
       editorPanes.push(state)
@@ -724,31 +727,6 @@ async function initApp() {
     localStorage.removeItem('md-studio-editor-state')
   }
 
-  const openFileParam = new URLSearchParams(window.location.search).get('openFile')
-  const openFilePath = openFileParam ? decodeURIComponent(openFileParam) : null
-  if (openFilePath && window.electronAPI?.readFile) {
-    try {
-      const content = await window.electronAPI.readFile(openFilePath)
-      if (content == null) {
-        console.error('Failed to read file:', openFilePath)
-        alert('Failed to open file: ' + openFilePath + '\nThe file may have been moved or deleted.')
-        newFile()
-        return
-      }
-      const name = window.electronAPI.basename(openFilePath)
-      const state = newTabState(name, content, null)
-      editorPanes.push(state)
-      state.tabEl = renderTabDOM(state)
-      activateTab(state.id)
-      recordFileOpen(name, null, openFilePath)
-    } catch (e) {
-      console.error(e)
-      newFile()
-    }
-  } else {
-    newFile()
-  }
-
   // Restore sidebar width
   const saved = parseInt(localStorage.getItem('md-studio-sidebar-width'), 10)
   if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
@@ -759,15 +737,10 @@ async function initApp() {
   if (localStorage.getItem('md-studio-preview-collapsed')) {
     document.body.classList.add('preview-collapsed')
   }
-  // FIX P1-1: Force-show preview when a file is being opened via URL param or IPC
-  if (openFilePath || document.body.classList.contains('preview-collapsed')) {
-    // If we have a file to open, ensure preview is visible
-    if (openFilePath) {
-      document.body.classList.remove('preview-collapsed')
-      localStorage.removeItem('md-studio-preview-collapsed')
-    }
-  }
   updatePreviewToggleIcon()
+
+  // Start with an empty tab (IPC will add file tab on top if "Open with")
+  newFile()
 
   // Restore center split
   const savedSplit = localStorage.getItem('md-studio-split')
