@@ -1,4 +1,5 @@
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import JSZip from 'jszip'
@@ -8,6 +9,23 @@ import './styles.css'
 const $ = id => document.getElementById(id)
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
 const SIDEBAR_MIN = 180, SIDEBAR_MAX = 500, SIDEBAR_DEFAULT = 260
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms) } }
+
+// FIX P2-2: Toast notification system
+let _toastTimer = null
+function showToast(message) {
+    let toast = document.getElementById('toast-notification')
+    if (!toast) {
+        toast = document.createElement('div')
+        toast.id = 'toast-notification'
+        toast.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:6px;font-size:14px;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none;white-space:nowrap;'
+        document.body.appendChild(toast)
+    }
+    toast.textContent = message
+    toast.style.opacity = '1'
+    if (_toastTimer) clearTimeout(_toastTimer)
+    _toastTimer = setTimeout(() => { toast.style.opacity = '0' }, 2500)
+}
 let nextTabId = 1
 let activeTab = null
 let editorPanes = []
@@ -30,7 +48,9 @@ try {
 marked.setOptions({ breaks: true, gfm: true, headerIds: false, mangle: false })
 
 function newTabState(name, content = '', handle = null) {
-    return { id: nextTabId++, name, content, handle, isDirty: false, editorEl: null, previewEl: null, tabEl: null }
+    const state = { id: nextTabId++, name, content, handle, isDirty: false, editorEl: null, previewEl: null, tabEl: null }
+    state._debouncedRenderPreview = debounce(() => { if (state.previewEl) state.previewEl.innerHTML = DOMPurify.sanitize(marked.parse(state.content || '')) }, 150)
+    return state
 }
 
 function renderTabDOM(state, insertBeforeEl = null) {
@@ -69,7 +89,12 @@ function closeTab(id, confirmIfDirty) {
 
 function activateTab(id) {
     const prev = activeTab
-    if (prev) saveEditorState(prev)
+    if (prev) {
+        saveEditorState(prev)
+        // Detach DOM elements for caching
+        if (prev.editorEl && prev.editorEl.parentNode) prev.editorEl.remove()
+        if (prev.previewEl && prev.previewEl.parentNode) prev.previewEl.remove()
+    }
     const state = editorPanes.find(t => t.id === id)
     if (!state) return
     activeTab = state
@@ -77,43 +102,47 @@ function activateTab(id) {
     state.tabEl && state.tabEl.classList.add('active')
     mountEditor(state)
     updateStatusBar()
+    // Set cursor to editor start after tab switch (FIX P2-2)
+    const editorEl = state.editorEl; if (editorEl) { const range = document.createRange(); range.setStart(editorEl, 0); range.collapse(true); const sel = window.getSelection(); if (sel) { sel.removeAllRanges(); sel.addRange(range) } }
+    syncCursorPos()
 }
 
 function mountEditor(state) {
     ;['editor-pane-content','preview-pane-content'].forEach(id2 => { const el = $(id2); if (el) el.remove() })
     const editorPane = $('editor-pane')
     editorPane.style.display = 'flex'
-    const editorWrap = document.createElement('div')
-    editorWrap.id = 'editor-pane-content'
-    editorWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-6 font-editor-text text-editor-text text-on-surface dark:text-inverse-on-surface min-h-0 focus:outline-none'
-    editorWrap.style.outline = 'none'; editorWrap.style.tabSize = '4'; editorWrap.style.MozTabSize = '4'; editorWrap.style.whiteSpace = 'pre-wrap'; editorWrap.style.wordWrap = 'break-word'; editorWrap.style.userSelect = 'text'
-    editorWrap.contentEditable = true; editorWrap.spellcheck = true
-    editorWrap.textContent = state.content
-    editorPane.appendChild(editorWrap)
-    state.editorEl = editorWrap
     const previewPane = $('preview-pane')
     previewPane.style.display = 'flex'
-    const previewWrap = document.createElement('div')
-    previewWrap.id = 'preview-pane-content'
-    previewWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-10 bg-surface-container-lowest dark:bg-on-secondary-fixed min-h-0'
-    previewWrap.innerHTML = marked.parse(state.content)
-    previewPane.appendChild(previewWrap)
-    state.previewEl = previewWrap
-    const currentFont = localStorage.getItem('md-studio-font') || 'system-ui, sans-serif'
-    if (currentFont !== 'disable') {
-        editorWrap.style.fontFamily = currentFont
-        previewWrap.style.fontFamily = currentFont
+    if (state.editorEl) {
+        editorPane.appendChild(state.editorEl)
+    } else {
+        const editorWrap = document.createElement('div')
+        editorWrap.id = 'editor-pane-content'
+        editorWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-6 font-editor-text text-editor-text text-on-surface dark:text-inverse-on-surface min-h-0 focus:outline-none'
+        editorWrap.style.outline = 'none'; editorWrap.style.tabSize = '4'; editorWrap.style.MozTabSize = '4'; editorWrap.style.whiteSpace = 'pre-wrap'; editorWrap.style.wordWrap = 'break-word'; editorWrap.style.userSelect = 'text'
+        editorWrap.contentEditable = true; editorWrap.spellcheck = true
+        editorWrap.textContent = state.content
+        editorPane.appendChild(editorWrap)
+        state.editorEl = editorWrap
+        attachEditorEvents(editorWrap, state)
     }
-    attachEditorEvents(editorWrap, state)
-    const editorEl = editorWrap; const range = document.createRange(); range.setStart(editorEl, 0); range.collapse(true); const sel = window.getSelection(); if (sel) { sel.removeAllRanges(); sel.addRange(range) }
-    syncCursorPos()
+    if (state.previewEl) {
+        previewPane.appendChild(state.previewEl)
+    } else {
+        const previewWrap = document.createElement('div')
+        previewWrap.id = 'preview-pane-content'
+        previewWrap.className = 'flex-1 overflow-y-auto custom-scrollbar p-10 bg-surface-container-lowest dark:bg-on-secondary-fixed min-h-0'
+        previewWrap.innerHTML = DOMPurify.sanitize(marked.parse(state.content))
+        previewPane.appendChild(previewWrap)
+        state.previewEl = previewWrap
+    }
 }
 
 function attachEditorEvents(el, state) {
-    el.addEventListener('input', () => { state.content = el.textContent; setDirty(state, true); state.previewEl && (state.previewEl.innerHTML = marked.parse(state.content || '')); syncCursorPos(); updateStatusBar() })
+    el.addEventListener('input', () => { state.content = el.textContent; setDirty(state, true); state._debouncedRenderPreview(); syncCursorPos(); _trackCursorOffset(); updateStatusBar() })
     el.addEventListener('keydown', e => { if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText',false,'    ') } })
     el.addEventListener('keyup', syncCursorPos)
-    el.addEventListener('click', syncCursorPos)
+    el.addEventListener('click', () => { syncCursorPos(); _trackCursorOffset() })
     el.addEventListener('scroll', () => { if (!_syncScroll || !state.previewEl) return; const ratio = el.scrollTop / (el.scrollHeight - el.clientHeight); state.previewEl.scrollTop = ratio * (state.previewEl.scrollHeight - state.previewEl.clientHeight) })
 }
 
@@ -125,10 +154,13 @@ function updateStatusBar() { if (!activeTab) return; const text = activeTab.cont
 
 async function openFileFromHandle(handle) {
     const file = await handle.getFile()
-    const existing = editorPanes.find(t => t.name === file.name)
+    const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+    // FIX P2-5: Dedup by full native path when available, fallback to basename
+    const existing = nativePath ? editorPanes.find(t => t.nativePath === nativePath) : editorPanes.find(t => t.name === file.name)
     if (existing) { activateTab(existing.id); return }
     const text = await file.text()
     const state = newTabState(file.name, text, handle)
+    if (nativePath) state.nativePath = nativePath
     editorPanes.push(state)
     state.tabEl = renderTabDOM(state)
     activateTab(state.id)
@@ -148,10 +180,13 @@ async function openFile() {
 $('file-input').addEventListener('change', async e => {
     const files = Array.from(e.target.files || [])
     for (const file of files) {
-        const existing = editorPanes.find(t => t.name === file.name)
+        const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+        // FIX P2-5: Dedup by full native path when available, fallback to basename
+        const existing = nativePath ? editorPanes.find(t => t.nativePath === nativePath) : editorPanes.find(t => t.name === file.name)
         if (existing) { activateTab(existing.id); continue }
         const text = await file.text()
         const state = newTabState(file.name, text, null)
+        if (nativePath) state.nativePath = nativePath
         editorPanes.push(state)
         state.tabEl = renderTabDOM(state)
         activateTab(state.id)
@@ -249,7 +284,7 @@ async function maybeOpenFromHistory(entry) {
 
 function renderExplorerDOM() {
     const container = $('explorer-content')
-    if (!container || $('explorer-section').classList.contains('hidden') && !container.children.length) return
+    if (!container || ($('explorer-section').classList.contains('hidden') && !container.children.length)) return
     container.innerHTML = ''
     if (fileHistory.length === 0) {
         container.innerHTML = '<p class="text-system-ui-sm text-on-surface-variant dark:text-secondary-fixed-dim italic">No files opened yet.</p>'
@@ -301,13 +336,16 @@ $('btn-save').addEventListener('click', saveCurrentTab)
 
 function getTabContent() { const s = activeTab; if (!s) return ''; return s.editorEl ? s.editorEl.textContent : s.content }
 function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href) }
-function getPreviewHTML(state) { return state.previewEl ? state.previewEl.innerHTML : marked.parse(state.content) }
+function getPreviewHTML(state) { return state.previewEl ? state.previewEl.innerHTML : DOMPurify.sanitize(marked.parse(state.content)) }
 
 async function collectStyles() {
     let css = ''
-    document.querySelectorAll('style').forEach(s => { css += s.textContent + '\n' })
+    const seen = new Set()
+    document.querySelectorAll('style').forEach(s => { const t = s.textContent; if (!seen.has(t)) { seen.add(t); css += t + '\n' } })
     const links = document.querySelectorAll('link[rel="stylesheet"]')
     for (const link of links) {
+        if (seen.has(link.href)) continue
+        seen.add(link.href)
         try {
             const res = await fetch(link.href)
             if (res.ok) css += await res.text() + '\n'
@@ -317,7 +355,7 @@ async function collectStyles() {
 }
 
 async function capturePreviewFull(state, scale) {
-    const html = marked.parse(state.content || '')
+    const html = DOMPurify.sanitize(marked.parse(state.content || ''))
     const isDark = document.documentElement.classList.contains('dark')
     const wrapper = document.createElement('div')
     if (isDark) wrapper.className = 'dark'
@@ -335,13 +373,16 @@ async function capturePreviewFull(state, scale) {
     return canvas
 }
 
-async function exportHTML() { const md = getTabContent(); const html = marked.parse(md); const name = (activeTab ? activeTab.name : 'untitled').replace(/\.[^.]+$/,''); const styles = await collectStyles(); const doc = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>'; download(new Blob([doc],{type:'text/html'}), name + '.html') }
-async function exportPDF(state, scale) { state = state || activeTab; scale = scale || 3; if (!state || !state.content) return alert('Nothing to export.'); try { $('status-cursor').textContent = 'Generating PDF…'; const canvas = await capturePreviewFull(state, scale); const img = canvas.toDataURL('image/png'); const pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' }); const pw = pdf.internal.pageSize.getWidth(); const ph = (canvas.height * pw) / canvas.width; const pageH = pdf.internal.pageSize.getHeight(); const overlap = 6; let y = 0; let firstPage = true; while (y < ph) { if (!firstPage) pdf.addPage(); const off = firstPage ? 0 : overlap; pdf.addImage(img, 'PNG', 0, -(y - off), pw, ph); y += pageH; firstPage = false; } pdf.save(state.name.replace(/\.[^.]+$/,'') + '.pdf') } catch(e) { console.error(e); alert('PDF export failed.') } finally { $('status-cursor').textContent = 'Ln 1, Col 1' } }
+async function exportHTML() { const md = getTabContent(); const html = DOMPurify.sanitize(marked.parse(md)); const name = (activeTab ? activeTab.name : 'untitled').replace(/\.[^.]+$/,''); const styles = await collectStyles(); const doc = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>'; download(new Blob([doc],{type:'text/html'}), name + '.html') }
+async function exportPDF(state, scale) { state = state || activeTab; scale = scale || 3; if (!state || !state.content) return alert('Nothing to export.'); try { $('status-cursor').textContent = 'Generating PDF…'; const canvas = await capturePreviewFull(state, scale); const img = canvas.toDataURL('image/png'); const pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' }); const pw = pdf.internal.pageSize.getWidth(); const ph = (canvas.height * pw) / canvas.width; const pageH = pdf.internal.pageSize.getHeight(); const overlap = 6; let y = 0; let firstPage = true; while (y < ph) { if (!firstPage) pdf.addPage(); const off = firstPage ? 0 : overlap; pdf.addImage(img, 'PNG', 0, -(y - off), pw, ph); y += pageH; firstPage = false; } pdf.save(state.name.replace(/\.[^.]+$/,'') + '.pdf') } catch(e) { console.error(e); alert('PDF export failed.') } finally { syncCursorPos() } }
 async function exportImage(fmt, state, scale) { state = state || activeTab; scale = scale || 2; if (!state || !state.content) return alert('Nothing to export.'); try { const canvas = await capturePreviewFull(state, scale); canvas.toBlob(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = state.name.replace(/\.[^.]+$/,'') + '.' + fmt; a.click(); URL.revokeObjectURL(a.href) }, fmt==='jpg'?'image/jpeg':'image/png', 0.92) } catch(e) { console.error(e); alert('Image export failed.') } }
 function exportTXT(state) { state = state || activeTab; const md = state ? (state.editorEl ? state.editorEl.textContent : state.content) : ''; const name = state ? state.name.replace(/\.[^.]+$/,'') : 'untitled'; download(new Blob([md],{type:'text/plain'}), name + '.txt') }
 
 function activeEditor() { const s = activeTab; return s ? s.editorEl : null }
-function insertAtCursor(before, after, placeholder='text') { const el = activeEditor(); if (!el) return; el.focus(); const sel = window.getSelection(); if (!sel.rangeCount) { el.textContent += before + placeholder + after; return } const range = sel.getRangeAt(0); const text = before + placeholder + after; const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, before.length); range.collapse(true); sel.removeAllRanges(); sel.addRange(range) }
+// FIX P1-2: Track last cursor position per editor for fallback insert
+let _lastCursorOffset = 0
+function _trackCursorOffset() { const el = activeEditor(); if (!el) return; const sel = window.getSelection(); if (!sel.rangeCount) return; const range = sel.getRangeAt(0).cloneRange(); range.selectNodeContents(el); range.setEnd(sel.anchorNode, sel.anchorOffset); _lastCursorOffset = range.toString().length }
+function insertAtCursor(before, after, placeholder='text') { const el = activeEditor(); if (!el) return; el.focus(); const sel = window.getSelection(); if (!sel.rangeCount) { const pos = Math.min(_lastCursorOffset, el.textContent.length); const full = el.textContent; el.textContent = full.substring(0, pos) + before + placeholder + after + full.substring(pos); _lastCursorOffset = pos + before.length + placeholder.length + after.length; const range = document.createRange(); if (el.firstChild) { range.setStart(el.firstChild, Math.min(_lastCursorOffset, el.textContent.length)); range.collapse(true); if (sel) { sel.removeAllRanges(); sel.addRange(range) } } return } const range = sel.getRangeAt(0); const text = before + placeholder + after; const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, before.length); range.collapse(true); sel.removeAllRanges(); sel.addRange(range) }
 function wrapSelection(openTag, closeTag) { const el = activeEditor(); if (!el) return; el.focus(); const sel = window.getSelection(); const range = sel.rangeCount ? sel.getRangeAt(0) : null; const selected = range ? range.toString() : ''; const noSel = !sel.rangeCount || selected === ''; const text = noSel ? openTag + closeTag : openTag + selected + closeTag; if (range) { const node = document.createTextNode(text); range.deleteContents(); range.insertNode(node); if (!noSel) { range.setStart(node, openTag.length); range.setEnd(node, openTag.length + selected.length) } else { range.setStart(node, openTag.length); range.collapse(true) } } else { el.textContent += text } if (activeTab) setDirty(activeTab, true) }
 function insertLinePrefix(prefix) { const el = activeEditor(); const s = activeTab; if (!el || !s) return; const fullText = el.textContent; const off = getOffset(el); const pos = Math.min(off, fullText.length); let lineStart = fullText.lastIndexOf('\n', pos - 1) + 1; let lineEnd = fullText.indexOf('\n', pos); if (lineEnd === -1) lineEnd = fullText.length; const line = fullText.substring(lineStart, lineEnd); if (line.startsWith(prefix)) return; el.textContent = fullText.substring(0, lineStart) + prefix + line + fullText.substring(lineEnd); const newOff = lineStart + prefix.length + (pos - lineStart); const range = document.createRange(); const sel = window.getSelection(); if (el.firstChild) { range.setStart(el.firstChild, Math.min(newOff, el.textContent.length)); range.collapse(true); if (sel) { sel.removeAllRanges(); sel.addRange(range) } }; setDirty(s, true) }
 function getOffset(el) { const sel = window.getSelection(); if (!sel || !sel.rangeCount) return 0; const range = sel.getRangeAt(0).cloneRange(); range.selectNodeContents(el); range.setEnd(sel.anchorNode, sel.anchorOffset); return range.toString().length }
@@ -423,16 +464,18 @@ $('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') { $(
 $('btn-copy-html').addEventListener('click', () => { if (!activeTab || !activeTab.editorEl) return; navigator.clipboard.writeText(activeTab.editorEl.textContent).then(() => { $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'check'; setTimeout(() => $('btn-copy-html').querySelector('.material-symbols-outlined').textContent = 'content_copy', 1500) }) })
 
 async function openFolderEntry(entry, dirName) {
-    const existing = editorPanes.find(t => t.name === entry.name)
-    if (existing) { activateTab(existing.id); return }
     try {
         const file = await entry.getFile()
+        const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
+        // FIX P2-5: Dedup by nativePath when available
+        const existing = nativePath ? editorPanes.find(t => t.nativePath === nativePath) : editorPanes.find(t => t.name === entry.name)
+        if (existing) { activateTab(existing.id); return }
         const content = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.markdown') ? await file.text() : '[Binary file - preview not available]'
         const state = newTabState(entry.name, content, null)
+        if (nativePath) state.nativePath = nativePath
         editorPanes.push(state)
         state.tabEl = renderTabDOM(state)
         activateTab(state.id)
-        const nativePath = window.electronAPI?.isElectron ? window.electronAPI.getPathForFile(file) : null
         recordFileOpen(entry.name, dirName, nativePath)
     } catch (e) {
         console.error(e)
@@ -495,8 +538,8 @@ $('open-selected-files').addEventListener('click', async () => {
 
 
 function initTheme() { const saved = localStorage.getItem('md-studio-theme'); if (saved === 'dark') { document.documentElement.classList.add('dark'); $('theme-icon').textContent = 'light_mode'; $('settings-theme-icon').textContent = 'light_mode' } else { document.documentElement.classList.remove('dark'); $('theme-icon').textContent = 'dark_mode'; $('settings-theme-icon').textContent = 'dark_mode' } }
-$('theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = marked.parse(activeTab.content)) } })
-$('settings-theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = marked.parse(activeTab.content)) } })
+$('theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = DOMPurify.sanitize(marked.parse(activeTab.content))) } })
+$('settings-theme-toggle').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); const dark = document.documentElement.classList.contains('dark'); localStorage.setItem('md-studio-theme', dark ? 'dark' : 'light'); $('theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; $('settings-theme-icon').textContent = dark ? 'light_mode' : 'dark_mode'; if (activeTab) { activeTab.previewEl && (activeTab.previewEl.innerHTML = DOMPurify.sanitize(marked.parse(activeTab.content))) } })
 
 function restoreFontPrefs() { const font = localStorage.getItem('md-studio-font') || 'system-ui, sans-serif'; const size = localStorage.getItem('md-studio-fontsize') || '15'; $('font-select').value = font; $('fontsize-select').value = size; applyFont(font); applySize(size) }
 function applyFont(font) {
@@ -561,30 +604,30 @@ $('batch-export-btn').addEventListener('click', async () => {
     const total = selectedStates.length
     let completed = 0
 
-    async function wrapHTML(md, name) { const html = marked.parse(md); const styles = await collectStyles(); return '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>' }
+    async function wrapHTML(md, name) { const html = DOMPurify.sanitize(marked.parse(md)); const styles = await collectStyles(); return '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\"><title>' + name + '</title><style>' + styles + '</style></head><body><div class=\"preview-export\">' + html + '</div></body></html>' }
 
         if (downloadMode === 'individual') {
             for (const state of selectedStates) {
-            progressText.textContent = `Exporting ${state.name}... (${completed + 1}/${total})`
-            progressBar.style.width = ((completed / total) * 100) + '%'
-            try {
-                switch (format) {
-                    case 'html': {
-                        const doc = await wrapHTML(state.content, state.name.replace(/\.[^.]+$/, ''))
-                        download(new Blob([doc], { type: 'text/html' }), state.name.replace(/\.[^.]+$/, '') + '.html')
-                        break
+                progressText.textContent = `Exporting ${state.name}... (${completed + 1}/${total})`
+                progressBar.style.width = ((completed / total) * 100) + '%'
+                try {
+                    switch (format) {
+                        case 'html': {
+                            const doc = await wrapHTML(state.content, state.name.replace(/\.[^.]+$/, ''))
+                            download(new Blob([doc], { type: 'text/html' }), state.name.replace(/\.[^.]+$/, '') + '.html')
+                            break
+                        }
+                        case 'pdf': await exportPDF(state, scale); break
+                        case 'png': await exportImage('png', state, scale); break
+                        case 'jpg': await exportImage('jpg', state, scale); break
+                        case 'txt': exportTXT(state); break
                     }
-                    case 'pdf': await exportPDF(state, scale); break
-                    case 'png': await exportImage('png', state, scale); break
-                    case 'jpg': await exportImage('jpg', state, scale); break
-                    case 'txt': exportTXT(state); break
-                }
-            } catch (e) { console.error(e) }
-            completed++
-            progressBar.style.width = ((completed / total) * 100) + '%'
-            await new Promise(r => setTimeout(r, 300))
-        }
-    } else {
+                } catch (e) { console.error(e) }
+                completed++
+                progressBar.style.width = ((completed / total) * 100) + '%'
+                await new Promise(r => setTimeout(r, 300))
+            }
+        } else {
         const zip = new JSZip()
         const folder = zip.folder('md-code-export')
         for (const state of selectedStates) {
@@ -647,15 +690,19 @@ if (window.electronAPI?.onOpenFile) {
   window.electronAPI.onOpenFile(async (filePath) => {
     try {
       const content = await window.electronAPI.readFile(filePath)
-      if (content == null) { console.error('Failed to read file:', filePath); return }
+      if (content == null) { console.error('Failed to read file:', filePath); alert('Failed to open file: ' + filePath + '\nThe file may have been moved or deleted.'); return }
       const name = window.electronAPI.basename(filePath)
-      const existing = editorPanes.find(t => t.name === name)
+      // FIX P2-5: Dedup by full path when available from Electron IPC
+      const existing = editorPanes.find(t => t.nativePath === filePath || t.name === name)
       if (existing) { activateTab(existing.id); return }
       const state = newTabState(name, content, null)
+      state.nativePath = filePath
       editorPanes.push(state)
       state.tabEl = renderTabDOM(state)
       activateTab(state.id)
       recordFileOpen(name, null, filePath)
+      // FIX P2-2: Visual feedback that file was opened via second-instance
+      showToast('Opened ' + name)
     } catch (e) {
       console.error(e)
     }
@@ -685,6 +732,7 @@ async function initApp() {
       const content = await window.electronAPI.readFile(openFilePath)
       if (content == null) {
         console.error('Failed to read file:', openFilePath)
+        alert('Failed to open file: ' + openFilePath + '\nThe file may have been moved or deleted.')
         newFile()
         return
       }
@@ -711,6 +759,14 @@ async function initApp() {
   // Restore preview collapsed state
   if (localStorage.getItem('md-studio-preview-collapsed')) {
     document.body.classList.add('preview-collapsed')
+  }
+  // FIX P1-1: Force-show preview when a file is being opened via URL param or IPC
+  if (openFilePath || document.body.classList.contains('preview-collapsed')) {
+    // If we have a file to open, ensure preview is visible
+    if (openFilePath) {
+      document.body.classList.remove('preview-collapsed')
+      localStorage.removeItem('md-studio-preview-collapsed')
+    }
   }
   updatePreviewToggleIcon()
 
@@ -834,4 +890,7 @@ function updatePreviewToggleIcon() {
 document.addEventListener('DOMContentLoaded', () => {
   const pb = document.getElementById('preview-toggle-btn')
   if (pb) pb.addEventListener('click', togglePreview)
+  // FIX P3: Search replace toggle button handler
+  const searchToggle = document.getElementById('search-replace-toggle')
+  if (searchToggle) searchToggle.addEventListener('click', () => { $('find-replace-bar').classList.toggle('hidden'); if (!$('find-replace-bar').classList.contains('hidden')) $('find-input').focus() })
 })

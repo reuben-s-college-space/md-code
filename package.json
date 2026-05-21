@@ -60,6 +60,7 @@
     }
   },
   "dependencies": {
+    "dompurify": "^3.4.5",
     "file-saver": "^2.0.5",
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.2",
@@ -68,6 +69,7 @@
     "turndown": "^7.2.0"
   },
   "devDependencies": {
+    "@types/dompurify": "^3.0.5",
     "autoprefixer": "^10.4.21",
     "electron": "^42.2.0",
     "electron-builder": "^26.8.1",
